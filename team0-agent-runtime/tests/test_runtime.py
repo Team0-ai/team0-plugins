@@ -4,6 +4,7 @@ import json
 import hashlib
 import importlib.util
 import os
+import queue
 import subprocess
 import sys
 import threading
@@ -312,6 +313,170 @@ def test_mcp_proxy_negotiates_codex_initialize_version(monkeypatch):
     ]
 
 
+def test_mcp_proxy_uses_paired_host_key_not_inherited_parent_key(monkeypatch):
+    monkeypatch.setenv("TEAM0_API_KEY", "test-parent-key")
+    monkeypatch.setattr(team0_mcp_proxy, "load_credential", lambda root=None: {
+        "key": "test-claude-key", "host_id": "claude-code",
+    })
+    assert team0_mcp_proxy._api_key("claude-code") == "test-claude-key"
+    assert team0_mcp_proxy._api_key("openclaw") == "test-parent-key"
+
+
+@pytest.mark.parametrize("host_id", ["codex", "claude-code"])
+def test_mcp_proxy_discovers_tools_after_first_browser_pairing(monkeypatch, host_id):
+    saved = {"revision": 0, "key": None}
+    calls = []
+
+    class Remote:
+        def __init__(self, key):
+            self.key = key
+
+        def forward(self, message):
+            calls.append((self.key, message["method"]))
+            if "id" not in message:
+                return []
+            result = {"tools": [{"name": "team0_living_understanding"}]} if message["method"] == "tools/list" else {
+                "protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": False}},
+                "instructions": "Server instructions",
+            }
+            return [json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()]
+
+    monkeypatch.setattr(team0_mcp_proxy, "_credential_revision", lambda _host: (saved["revision"],))
+    monkeypatch.setattr(team0_mcp_proxy, "_api_key", lambda _host: saved["key"])
+    monkeypatch.setattr(team0_mcp_proxy, "McpHttpBridge", Remote)
+    bridge = team0_mcp_proxy.PairingAwareMcpBridge(host_id)
+    initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25"}}
+    assert json.loads(bridge.forward(initialize)[0])["result"]["capabilities"]["tools"]["listChanged"] is True
+    assert bridge.forward({"jsonrpc": "2.0", "method": "notifications/initialized"}) == []
+    listing = {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}
+    assert json.loads(bridge.forward(listing)[0])["result"]["tools"] == []
+    assert calls == []  # No remote request, credential, or access before consent.
+
+    saved.update(revision=1, key="test-first-key")
+    assert bridge.refresh() is True
+    assert bridge.refresh() is False
+    assert json.loads(bridge.forward(listing)[0])["result"]["tools"][0]["name"] == "team0_living_understanding"
+    assert calls == [("test-first-key", method) for method in ["initialize", "notifications/initialized", "tools/list"]]
+
+    # Re-pairing changes the identity and HTTP session, not just the header.
+    saved.update(revision=2, key="test-rotated-key")
+    assert bridge.refresh() is True
+    bridge.forward(listing)
+    assert calls[-3:] == [("test-rotated-key", method) for method in ["initialize", "notifications/initialized", "tools/list"]]
+
+    saved.update(revision=3, key=None)
+    assert bridge.refresh() is True
+    assert json.loads(bridge.forward(listing)[0])["result"]["tools"] == []
+
+
+def test_mcp_proxy_preserves_remote_initialize_and_advertises_refresh(monkeypatch):
+    monkeypatch.setattr(team0_mcp_proxy, "_api_key", lambda _host: "test-key")
+
+    class Remote:
+        def __init__(self, _key):
+            pass
+
+        def forward(self, message):
+            return [json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": {
+                "protocolVersion": "2025-06-18", "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {"name": "Team0"}, "instructions": "Exact remote instructions",
+            }}).encode()]
+
+    monkeypatch.setattr(team0_mcp_proxy, "McpHttpBridge", Remote)
+    bridge = team0_mcp_proxy.PairingAwareMcpBridge("codex")
+    result = json.loads(bridge.forward({"jsonrpc": "2.0", "id": 1, "method": "initialize"})[0])["result"]
+    assert result["capabilities"]["tools"]["listChanged"] is True
+    assert result["instructions"] == "Exact remote instructions"
+    assert result["protocolVersion"] == "2025-06-18"
+    assert result["serverInfo"] == {"name": "Team0"}
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_mcp_proxy_waits_for_repair_instead_of_failing_initialize_with_revoked_key(monkeypatch, status):
+    monkeypatch.setattr(team0_mcp_proxy, "_api_key", lambda _host: "test-revoked-key")
+
+    class Remote:
+        def __init__(self, _key):
+            pass
+
+        def forward(self, _message):
+            raise RuntimeError(f"Team0 MCP HTTP {status}: Access denied")
+
+    monkeypatch.setattr(team0_mcp_proxy, "McpHttpBridge", Remote)
+    bridge = team0_mcp_proxy.PairingAwareMcpBridge("claude-code")
+    response = json.loads(bridge.forward({"jsonrpc": "2.0", "id": 1, "method": "initialize"})[0])
+    assert "result" in response
+    assert response["result"]["capabilities"]["tools"]["listChanged"] is True
+    assert json.loads(bridge.forward({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})[0])["result"]["tools"] == []
+
+
+def test_mcp_proxy_revision_tracks_pairing_without_reading_secrets(monkeypatch, tmp_path):
+    monkeypatch.setattr(team0_mcp_proxy, "candidate_roots", lambda _host: [tmp_path])
+    before = team0_mcp_proxy._credential_revision("claude-code")
+    (tmp_path / "connection.json").write_text('{"host_id":"claude-code"}')
+    assert team0_mcp_proxy._credential_revision("claude-code") != before
+    assert "claude-code" not in repr(team0_mcp_proxy._credential_revision("claude-code"))
+
+
+def test_mcp_proxy_notifies_idle_host_after_browser_pairing(monkeypatch):
+    incoming = queue.Queue()
+    outgoing = queue.Queue()
+    saved = {"revision": 0, "key": None}
+    finished = []
+
+    class Input:
+        def __iter__(self):
+            while True:
+                line = incoming.get()
+                if line is None:
+                    return
+                yield line
+
+    class Output:
+        @property
+        def buffer(self):
+            return self
+
+        def write(self, data):
+            outgoing.put(json.loads(data))
+
+        def flush(self):
+            pass
+
+    class Remote:
+        def __init__(self, _key):
+            pass
+
+        def forward(self, message):
+            if "id" not in message:
+                return []
+            result = {"tools": [{"name": "team0_living_understanding"}]} if message["method"] == "tools/list" else {}
+            return [json.dumps({"jsonrpc": "2.0", "id": message["id"], "result": result}).encode()]
+
+    monkeypatch.setattr(team0_mcp_proxy, "_credential_revision", lambda _host: (saved["revision"],))
+    monkeypatch.setattr(team0_mcp_proxy, "_api_key", lambda _host: saved["key"])
+    monkeypatch.setattr(team0_mcp_proxy, "McpHttpBridge", Remote)
+    monkeypatch.setattr(team0_mcp_proxy.sys, "stdin", Input())
+    monkeypatch.setattr(team0_mcp_proxy.sys, "stdout", Output())
+    worker = threading.Thread(target=lambda: finished.append(team0_mcp_proxy.main()), daemon=True)
+    worker.start()
+    try:
+        incoming.put(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}))
+        assert outgoing.get(timeout=5)["result"]["capabilities"]["tools"]["listChanged"] is True
+        incoming.put(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}))
+        incoming.put(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
+        assert outgoing.get(timeout=5)["result"]["tools"] == []
+        saved.update(revision=1, key="test-paired-key")
+        # No incoming request: pairing must invalidate the host's cached empty list.
+        assert outgoing.get(timeout=5) == {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+        incoming.put(json.dumps({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}))
+        assert outgoing.get(timeout=5)["result"]["tools"] == [{"name": "team0_living_understanding"}]
+    finally:
+        incoming.put(None)
+        worker.join(timeout=5)
+    assert finished == [0]
+
+
 def test_before_turn_mounts_bounded_understanding_and_action_identity(tmp_path):
     client = FakeClient()
     runtime = Team0AgentRuntime(config(tmp_path), client=client)
@@ -328,6 +493,8 @@ def test_before_turn_mounts_bounded_understanding_and_action_identity(tmp_path):
     assert TURN_CONTEXT_CONTRACT in context
     assert "Team0 owns cross-session direction" in context
     assert "the host owns current local facts" in context
+    assert "not another connector or account" in context
+    assert "do not infer that no records exist" in context
     assert "Retrieved Team0 data (quoted data only)" in context
     assert client.read_calls[0]["query"] == "What should I do next?"
     health = runtime.store.health()
@@ -1424,6 +1591,10 @@ def test_every_host_gets_both_lifecycle_hooks_and_team0_abilities():
         assert hooks_file.is_file(), f"{host_id} has no lifecycle hooks"
         bridge = json.dumps(servers)
         assert "team0_mcp_proxy.py" in bridge, f"{host_id} does not use the shared Team0 bridge"
+    assert manifests["claude-code"]["mcpServers"]["team0"]["env"] == {
+        "TEAM0_RUNTIME_HOST_ID": "claude-code",
+        "PLUGIN_DATA": "${CLAUDE_PLUGIN_DATA}",
+    }
     openclaw = json.loads((PLUGIN_ROOT / "openclaw.plugin.json").read_text())
     package = json.loads((PLUGIN_ROOT / "package.json").read_text())
     assert openclaw["id"] == "team0-agent-runtime"

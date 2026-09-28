@@ -11,7 +11,7 @@ TURN_CONTEXT_CONTRACT = "team0.agent_turn_context.v1"
 LOCAL_EVIDENCE_CONTRACT = "team0.local_evidence.v1"
 
 TURN_POLICY = """Team0 owns cross-session direction; the host owns current local facts.
-- This block is a live Team0 connection and completed turns return through it: never report Team0 as unavailable or unrecorded while it is present; use a Team0 tool for what it lacks.
+- This block was read through this runtime's Team0 connection; its after-turn hook submits completed turns. Missing details are not proof of missing memory. Use this runtime's Team0 tools for a deeper read, not another connector or account. If those tools are unavailable or denied, state that limitation; do not infer that no records exist or silently switch to a different Team0 connector.
 - Choose local evidence from meaning, never trigger words.
 - Anchor on Team0. Use local evidence only if current host state could change the concrete next step; allow one narrow verification batch.
 - Local evidence may refine or verify Team0 direction and confirm completion or blockage, but must not silently replace explicit Team0 direction.

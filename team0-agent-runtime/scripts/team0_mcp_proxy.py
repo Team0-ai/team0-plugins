@@ -4,8 +4,8 @@
 Hosts start MCP servers as separate processes, before the prompt hooks run, so
 a hook cannot populate ``TEAM0_API_KEY`` in the environment of a remote HTTP
 MCP server.  This process is the MCP server from the host's perspective and
-loads that host's key from the same secure store as the lifecycle hook before
-forwarding each JSON-RPC message.  Every host uses it, so Team0's abilities do
+reloads that host's key when pairing changes and refreshes the host's tool list.
+Every host uses it, so Team0's abilities do
 not depend on the user having configured an MCP server by hand.
 """
 
@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import sys
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -24,10 +26,11 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_ROOT))
 
 from credential_store import load_credential  # noqa: E402
-from host_profile import detect_host_id, host_credential, profile  # noqa: E402
+from host_profile import candidate_roots, detect_host_id, host_credential  # noqa: E402
 
 
 DEFAULT_BASE_URL = "https://api.team0.ai/v1"
+RUNTIME_VERSION = "0.1.3"
 # The Team0 endpoint exposes the modern 2026 adapter for direct runtime calls,
 # but its Streamable HTTP MCP handshake currently accepts the legacy versions
 # that Codex sends.  Keep the bridge on the negotiated MCP session version.
@@ -36,17 +39,18 @@ PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0]
 
 
 def _api_key(host_id: str | None = None) -> str | None:
+    host_id = host_id or detect_host_id()
     ambient = os.environ.get("TEAM0_API_KEY") or os.environ.get("TEAM0_ACCESS_KEY")
-    if ambient:
+    if ambient and host_id == "openclaw":
         return ambient
     # One host never borrows another host's grant: the key is that host's
     # identity in Team0, and its reads and contributions are attributed to it.
     saved = host_credential(
-        host_id or detect_host_id(), loader=lambda root=None: load_credential(root=root)
+        host_id, loader=lambda root=None: load_credential(root=root)
     )
     if not saved:
-        return None
-    return str(saved.get("key") or "").strip() or None
+        return ambient or None
+    return str(saved.get("key") or "").strip() or ambient or None
 
 
 def _endpoint() -> str:
@@ -91,7 +95,7 @@ class McpHttpBridge:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
             "MCP-Protocol-Version": self._version_for(message),
-            "User-Agent": "team0-agent-runtime/0.1.1",
+            "User-Agent": f"team0-agent-runtime/{RUNTIME_VERSION}",
         }
         if self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
@@ -125,18 +129,128 @@ def _error_response(message: Mapping[str, Any], detail: str) -> bytes:
     return json.dumps(response, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def _credential_revision(host_id: str) -> tuple:
+    """Watch secret-free pairing metadata, without polling the OS keychain."""
+    revisions = []
+    for root in candidate_roots(host_id):
+        for name in ("connection.json", "credential.bin"):
+            path = root / name
+            try:
+                stat = path.stat()
+                revisions.append((str(path), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                revisions.append((str(path), None, None))
+    return tuple(revisions)
+
+
+class PairingAwareMcpBridge:
+    """Stay discoverable before consent; never retain a pre-pairing identity."""
+
+    def __init__(self, host_id: str) -> None:
+        self.host_id = host_id
+        self._revision: tuple | None = None
+        self._key: str | None = None
+        self._bridge: McpHttpBridge | None = None
+        self._initialize: Mapping[str, Any] | None = None
+        self._remote_initialized = False
+        self.refresh()
+
+    def refresh(self) -> bool:
+        revision = _credential_revision(self.host_id)
+        if revision == self._revision:
+            return False
+        self._revision = revision
+        key = _api_key(self.host_id)
+        if key == self._key:
+            return False
+        self._key = key
+        self._bridge = McpHttpBridge(key) if key else None
+        self._remote_initialized = False
+        return self._initialize is not None
+
+    @staticmethod
+    def _result(message: Mapping[str, Any], result: Mapping[str, Any]) -> list[bytes]:
+        return [json.dumps({
+            "jsonrpc": "2.0", "id": message["id"], "result": result,
+        }, separators=(",", ":")).encode("utf-8")]
+
+    def forward(self, message: Mapping[str, Any]) -> list[bytes]:
+        method = message.get("method")
+        if method == "initialize":
+            self._initialize = message
+            payloads = []
+            if self._bridge:
+                try:
+                    payloads = self._bridge.forward(message)
+                except RuntimeError as error:
+                    if not str(error).startswith(("Team0 MCP HTTP 401:", "Team0 MCP HTTP 403:")):
+                        raise
+                    # A revoked startup key must not make the host disconnect
+                    # before the SessionStart hook can replace it through consent.
+                    self._bridge = None
+            if not self._bridge:
+                params = message.get("params") or {}
+                version = params.get("protocolVersion")
+                return self._result(message, {
+                    "protocolVersion": version if version in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION,
+                    "capabilities": {"tools": {"listChanged": True}},
+                    "serverInfo": {"name": "team0-agent-runtime", "version": RUNTIME_VERSION},
+                    "instructions": "Team0 awaits browser approval. Do not substitute another connector or account. Tools refresh after pairing.",
+                })
+            for index, payload in enumerate(payloads):
+                response = json.loads(payload)
+                if isinstance(response.get("result"), dict):
+                    response["result"].setdefault("capabilities", {}).setdefault("tools", {})["listChanged"] = True
+                    payloads[index] = json.dumps(response, separators=(",", ":")).encode("utf-8")
+                    self._remote_initialized = True
+            return payloads
+
+        if method == "notifications/initialized":
+            return self._bridge.forward(message) if self._remote_initialized else []
+        if not self._bridge:
+            if "id" not in message:
+                return []
+            if method == "tools/list":
+                return self._result(message, {"tools": []})
+            if method == "ping":
+                return self._result(message, {})
+            return [_error_response(message, "Approve this host's Team0 connection in the browser first; do not use another connector's grant.")]
+
+        if not self._remote_initialized:
+            if not self._initialize:
+                return [_error_response(message, "Initialize the Team0 MCP session first.")]
+            payloads = self._bridge.forward(self._initialize)
+            if not any("result" in json.loads(payload) for payload in payloads):
+                return [_error_response(message, "Team0 MCP initialization failed; retry after connecting.")]
+            self._bridge.forward({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            self._remote_initialized = True
+        return self._bridge.forward(message)
+
+
 def main() -> int:
-    host_id = detect_host_id()
-    api_key = _api_key(host_id)
-    if not api_key:
-        print(
-            f"Team0 is not connected for {profile(host_id).name}; "
-            "Team0 will connect it on the next turn, or connect it from Team0.",
-            file=sys.stderr,
-        )
-        return 1
-    bridge = McpHttpBridge(api_key)
-    for line in sys.stdin:
+    bridge = PairingAwareMcpBridge(detect_host_id())
+    incoming: queue.Queue[str | None] = queue.Queue()
+
+    def read_input() -> None:
+        try:
+            for line in sys.stdin:
+                incoming.put(line)
+        finally:
+            incoming.put(None)
+
+    threading.Thread(target=read_input, daemon=True).start()
+    while True:
+        # Pairing runs in a separate hook process. Notify even while the host
+        # is idle, otherwise its initial empty tool list stays cached forever.
+        if bridge.refresh():
+            sys.stdout.buffer.write(b'{"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n')
+            sys.stdout.buffer.flush()
+        try:
+            line = incoming.get(timeout=1)
+        except queue.Empty:
+            continue
+        if line is None:
+            break
         if not line.strip():
             continue
         message: Mapping[str, Any] = {}
@@ -146,7 +260,7 @@ def main() -> int:
                 raise ValueError("MCP message must be an object")
             payloads = bridge.forward(message)
         except (json.JSONDecodeError, ValueError, RuntimeError) as error:
-            payloads = [_error_response(message, str(error))]
+            payloads = [_error_response(message, str(error))] if "id" in message else []
         for payload in payloads:
             sys.stdout.buffer.write(payload.rstrip(b"\n") + b"\n")
             sys.stdout.buffer.flush()

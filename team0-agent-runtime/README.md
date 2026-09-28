@@ -39,13 +39,16 @@ username-only macOS credentials remain valid for Codex, but are never borrowed b
 The host may still perform its own trust review for the two required lifecycle permissions. Team0
 does not label the connection healthy until both permissions have actually run.
 
-Codex starts MCP servers in a separate process before its prompt hooks run. The Codex package
-therefore uses the local `scripts/team0_mcp_proxy.py` stdio bridge. The bridge loads only the
-Codex-scoped credential from the secure store and forwards MCP requests to Team0 over HTTPS. This
-keeps the Codex and Claude Code grants separate while making the MCP tools available on the first
-turn after pairing. It negotiates the legacy MCP session version Codex currently sends during
+Both coding hosts start MCP servers before their prompt hooks run and use the same local
+`scripts/team0_mcp_proxy.py` stdio bridge. It stays alive without a credential, exposing no tools
+until consent, and reloads the host-scoped key/session when pairing metadata changes. A
+`notifications/tools/list_changed` event asks the host to discard its cached empty/stale tool
+list; no tool schema is duplicated locally and no other connector is used as a fallback.
+Claude's manifest explicitly shares the hook's persistent plugin-data directory. These
+2026-09-28 corrections are local/tested; first-session discovery in installed hosts remains a
+release gate. The bridge negotiates the legacy MCP session version Codex currently sends during
 `initialize` (2025-11-25 or 2025-06-18); automatic lifecycle reads then use the modern 2026
-projection contract directly. Claude Code continues to use its own HTTP MCP configuration.
+projection contract directly. Both grants remain separate.
 
 Other hosts may inject these values into the agent process from a managed secret/configuration
 system:
@@ -131,9 +134,12 @@ codex plugin marketplace add ybentov1/team0-plugins
 codex plugin add team0-agent-runtime@team0
 ```
 
-Restart the host once. Codex users must also run `/hooks`, review the Team0 plugin
-source, and trust its three hooks once; Codex intentionally skips untrusted plugin
-hooks. `SessionStart` then asks whether this host is connected. An unconnected host
+Codex desktop users open the installed Team0 plugin and choose **Trust all** in its
+Hooks section, or **Review** and trust its three hooks, then start a new task. `/hooks`
+is the Codex CLI path, not a prompt to send in desktop chat. Team0's setup button opens
+`codex://plugins/team0-agent-runtime@team0`; Settings → Plugins is the fallback. Hook
+trust is never auto-approved. Claude Code users start a new session and approve any
+host plugin review. `SessionStart` then asks whether this host is connected. An unconnected host
 opens the Team0 connect page immediately and says so in one line, rather than waiting
 for a first message to discover it. A connected host prints nothing and runs nothing.
 
