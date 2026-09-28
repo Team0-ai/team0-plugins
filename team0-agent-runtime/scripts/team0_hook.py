@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
+_BOOT_STARTED = time.monotonic()
 PLUGIN_ROOT = Path(os.environ.get("PLUGIN_ROOT") or Path(__file__).resolve().parents[1])
 sys.path.insert(0, str(PLUGIN_ROOT / "runtime"))
 
@@ -101,11 +102,9 @@ def _start_pairing(host_id: str) -> bool:
     return True
 
 
-def _credential_is_revoked(host_id: str) -> bool:
-    """Validate a saved key without reading or writing the owner's understanding."""
+def _credential_is_revoked() -> bool:
+    """Validate the already-loaded key without reading or writing understanding."""
 
-    if not _load_saved_credential(host_id):
-        return False
     config = RuntimeConfig.from_environ()
     try:
         Team0ApiClient(
@@ -232,7 +231,12 @@ def _output(*, event_name: str | None = None, context: str | None = None, warnin
 def _turn_id(event: Mapping[str, Any], *, host_id: str) -> str:
     supplied = str(event.get("turn_id") or "").strip()
     if supplied:
-        return supplied
+        # Codex can deliver multiple UserPromptSubmit events in one active turn.
+        # Keep retries stable without reusing a read key for different prompts.
+        return stable_id(
+            "hostturn", host_id, event.get("session_id") or "unknown-session",
+            supplied, event.get("prompt") or "",
+        )
     transcript_path = str(event.get("transcript_path") or "")
     try:
         transcript_revision = Path(transcript_path).stat().st_size
@@ -254,11 +258,14 @@ def main(argv: list[str]) -> int:
     _configure_host_environment(host_id)
     if command == "self-test":
         return _self_test(host_id)
+    credential_started = time.monotonic()
+    saved_key = _load_saved_credential(host_id)
+    credential_ms = round((time.monotonic() - credential_started) * 1000, 1)
     if command == "connect":
         # A session that starts unconnected should say so at once, rather than
         # waiting for a first message to discover it and open the browser then.
-        if _load_saved_credential(host_id):
-            if not _credential_is_revoked(host_id):
+        if saved_key:
+            if not _credential_is_revoked():
                 return 0
             launched = _start_pairing(host_id)
             _output(
@@ -283,7 +290,7 @@ def main(argv: list[str]) -> int:
             )
         )
         return 0
-    if command == "before-turn" and not _load_saved_credential(host_id):
+    if command == "before-turn" and not saved_key:
         launched = _start_pairing(host_id)
         _output(
             warning=(
@@ -295,7 +302,6 @@ def main(argv: list[str]) -> int:
             )
         )
         return 0
-    _load_saved_credential(host_id)
     config = RuntimeConfig.from_environ()
     if command == "status":
         try:
@@ -311,8 +317,22 @@ def main(argv: list[str]) -> int:
             "diagnostics": _diagnostics(host_id),
         }, indent=2, sort_keys=True))
         return 0
+    runtime_started = time.monotonic()
     runtime = Team0AgentRuntime(config)
+    if command == "before-turn":
+        # Secret-free timings survive a killed read process and distinguish
+        # startup/credential work from the API latency recorded by the runtime.
+        runtime.store.update_health(
+            last_before_turn_startup_ms=round((time.monotonic() - _BOOT_STARTED) * 1000, 1),
+            last_before_turn_credential_ms=credential_ms,
+            last_before_turn_runtime_init_ms=round((time.monotonic() - runtime_started) * 1000, 1),
+        )
+    input_started = time.monotonic()
     event = _input() if command != "status" else {}
+    if command == "before-turn":
+        runtime.store.update_health(
+            last_before_turn_input_ms=round((time.monotonic() - input_started) * 1000, 1),
+        )
     try:
         if command == "before-turn":
             session_id = str(event.get("session_id") or "unknown-session")
@@ -321,28 +341,31 @@ def main(argv: list[str]) -> int:
                 session_id=session_id,
                 turn_id=turn_id,
                 prompt=str(event.get("prompt") or ""),
+                host_turn_id=str(event.get("turn_id") or "").strip(),
             )
-            if runtime.store.get_turn(turn_id):
-                runtime.store.bind_active_turn(session_id=session_id, turn_id=turn_id)
             _output(event_name="UserPromptSubmit", context=context, warning=warning)
         elif command == "after-turn":
             session_id = str(event.get("session_id") or "unknown-session")
-            turn_id = str(event.get("turn_id") or "").strip()
-            turn_id = turn_id or runtime.store.active_turn_id(session_id) or ""
+            host_turn_id = str(event.get("turn_id") or "").strip()
+            turn_ids = runtime.store.active_turn_ids(session_id, host_turn_id=host_turn_id)
+            # Complete a retained pre-upgrade turn using its old host-supplied ID.
+            if not turn_ids and host_turn_id and runtime.store.get_turn(host_turn_id):
+                turn_ids = (host_turn_id,)
             warning = None
-            if turn_id:
-                warning = runtime.after_turn(
+            for index, turn_id in enumerate(turn_ids):
+                message = runtime.after_turn(
                     turn_id=turn_id,
                     assistant_message=(
                         str(event["last_assistant_message"])
-                        if event.get("last_assistant_message") is not None
+                        if index == len(turn_ids) - 1 and event.get("last_assistant_message") is not None
                         else None
                     ),
                 )
-                runtime.store.release_active_turn(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                )
+                warning = message or warning
+                if not runtime.store.get_turn(turn_id):
+                    runtime.store.release_active_turn(
+                        session_id=session_id, turn_id=turn_id, host_turn_id=host_turn_id,
+                    )
             _output(warning=warning)
         elif command == "after-tool":
             _output(warning=runtime.after_tool(event))

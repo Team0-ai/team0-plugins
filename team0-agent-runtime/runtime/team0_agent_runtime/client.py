@@ -88,6 +88,16 @@ class Team0ApiClient:
             timeout=self._read_timeout,
         )
         result = response.body.get("result")
+        if isinstance(result, Mapping) and result.get("isError") is True:
+            structured = result.get("structuredContent")
+            problem = structured.get("problem") if isinstance(structured, Mapping) else None
+            if isinstance(problem, Mapping):
+                status = problem.get("status")
+                raise ApiError(
+                    str(problem.get("code") or problem.get("type") or "mcp.tool_error"),
+                    status=status if isinstance(status, int) and 400 <= status <= 599 else 502,
+                    detail=str(problem.get("detail") or problem.get("title") or "Team0 rejected the read")[:500],
+                )
         if not isinstance(result, Mapping) or result.get("isError") is True:
             raise ApiError("protocol.invalid_understanding_result", status=502)
         structured = result.get("structuredContent")

@@ -134,14 +134,27 @@ codex plugin marketplace add ybentov1/team0-plugins
 codex plugin add team0-agent-runtime@team0
 ```
 
-Codex desktop users open the installed Team0 plugin and choose **Trust all** in its
-Hooks section, or **Review** and trust its three hooks, then start a new task. `/hooks`
-is the Codex CLI path, not a prompt to send in desktop chat. Team0's setup button opens
-`codex://plugins/team0-agent-runtime@team0`; Settings → Plugins is the fallback. Hook
+Codex desktop users click the **hook icon beside the chat input**. In **Review hooks**,
+allow **Checking your Team0 connection**, **Loading your Team0 understanding**, and
+**Returning this turn to Team0** with **Allow all** (or select only Team0 and choose
+**Allow selected**). This works in existing or new chats. Start a new task or send the
+next message to trigger pairing. `/hooks` is the Codex CLI path, not a prompt to send
+in desktop chat. **Settings → Hooks → team0-agent-runtime** is the fallback. The setup
+does not depend on the browser's plugin deep link, which may show an application-launch prompt. Hook
 trust is never auto-approved. Claude Code users start a new session and approve any
 host plugin review. `SessionStart` then asks whether this host is connected. An unconnected host
 opens the Team0 connect page immediately and says so in one line, rather than waiting
 for a first message to discover it. A connected host prints nothing and runs nothing.
+
+Native context tells the agent to use the read already supplied and request a deeper
+read only for a material gap, not a mere rephrasing. This is guidance, not a ban on
+additional reads. Codex's active `turn_id` can span several submitted messages:
+the adapter uses a stable message-specific identity, retains all distinct inputs,
+and submits them in order at Stop. Earlier steering messages are user-only records;
+only the final input is paired with the final assistant response. Retried callbacks
+reuse their identities rather than duplicating contributions. MCP error results
+retain their problem status/code (including `idempotency.conflict`) instead of being
+misreported as an invalid read response.
 
 The two published copies are built from this directory: the archive the Team0
 frontend build publishes, and the public git marketplace Codex requires.

@@ -56,15 +56,18 @@ class Team0AgentRuntime:
         )
 
     def before_turn(
-        self, *, session_id: str, turn_id: str, prompt: str
+        self, *, session_id: str, turn_id: str, prompt: str,
+        host_turn_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         prepared, warning = self.prepare_turn(
-            session_id=session_id, turn_id=turn_id, prompt=prompt
+            session_id=session_id, turn_id=turn_id, prompt=prompt,
+            host_turn_id=host_turn_id,
         )
         return (prepared.render() if prepared is not None else None), warning
 
     def prepare_turn(
-        self, *, session_id: str, turn_id: str, prompt: str
+        self, *, session_id: str, turn_id: str, prompt: str,
+        host_turn_id: str | None = None,
     ) -> tuple[AgentTurnContext | None, str | None]:
         """Return policy and retrieved data separately for any capable host adapter."""
 
@@ -74,6 +77,12 @@ class Team0AgentRuntime:
         self.store.start_turn(
             session_id=session_id, turn_id=turn_id, prompt=prompt, occurred_at=utc_now()
         )
+        if host_turn_id is not None:
+            # Persist callback correlation before any network wait. The host can
+            # kill this process on timeout and still return the completed turn.
+            self.store.bind_active_turn(
+                session_id=session_id, turn_id=turn_id, host_turn_id=host_turn_id,
+            )
         if not self.client:
             return self._degraded("not_configured", "Team0 access is not configured.")
         started = self._clock()
@@ -87,6 +96,7 @@ class Team0AgentRuntime:
                 state="revoked" if error.status in {401, 403, 410} else "degraded",
                 last_read_error=error.code,
                 last_read_status=error.status,
+                last_read_latency_ms=round((self._clock() - started) * 1000, 1),
             )
             return (
                 None,

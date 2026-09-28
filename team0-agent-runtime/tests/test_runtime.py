@@ -44,6 +44,7 @@ from team0_agent_runtime import (
     TURN_POLICY,
     build_agent_turn_context,
 )
+from team0_agent_runtime.client import ApiResponse
 
 
 PAIRING_SPEC = importlib.util.spec_from_file_location(
@@ -249,6 +250,53 @@ def test_understanding_read_sends_tool_name_and_preserves_mcp_error_status():
     assert requests[0].headers["Mcp-name"] == "team0_living_understanding"
 
 
+@pytest.mark.parametrize("status,code,retryable", [
+    (409, "idempotency.conflict", False),
+    (403, "auth.insufficient_scope", False),
+    (429, "rate_limit.exceeded", True),
+    (503, "dependency.unavailable", True),
+])
+def test_understanding_read_preserves_problem_inside_http_200_mcp_error(monkeypatch, status, code, retryable):
+    client = Team0ApiClient(base_url="https://api.team0.ai/v1", api_key="t0_live_test")
+    monkeypatch.setattr(client, "_request", lambda *_args, **_kwargs: ApiResponse(200, {
+        "result": {
+            "isError": True,
+            "structuredContent": {"problem": {"status": status, "code": code, "title": "Read rejected"}},
+        },
+    }, {}))
+    with pytest.raises(ApiError) as failure:
+        client.create_understanding_read(query="Question", idempotency_key="read-key")
+    assert (failure.value.status, failure.value.code, failure.value.retryable) == (status, code, retryable)
+    assert failure.value.detail == "Read rejected"
+
+
+def test_active_host_turn_mappings_are_isolated_and_release_only_completed_messages(tmp_path):
+    store = RuntimeStore(tmp_path)
+    for index in range(3):
+        store.start_turn(session_id="session", turn_id=str(index), prompt=str(index), occurred_at="now")
+    store.bind_active_turn(session_id="session", host_turn_id="host-a", turn_id="1")
+    store.bind_active_turn(session_id="session", host_turn_id="host-a", turn_id="0")
+    store.bind_active_turn(session_id="session", host_turn_id="host-b", turn_id="2")
+    store.bind_active_turn(session_id="session", host_turn_id="host-a", turn_id="1")
+    assert store.active_turn_ids("session", host_turn_id="host-a") == ("0", "1")
+    store.release_active_turn(session_id="session", host_turn_id="host-a", turn_id="0")
+    assert store.active_turn_ids("session", host_turn_id="host-a") == ("1",)
+    assert store.active_turn_ids("session", host_turn_id="host-b") == ("2",)
+
+
+def test_legacy_active_turn_mapping_remains_readable_and_retains_pending_input(tmp_path):
+    store = RuntimeStore(tmp_path)
+    store.start_turn(session_id="legacy", turn_id="old", prompt="Old input", occurred_at="now")
+    store.start_turn(session_id="legacy", turn_id="new", prompt="New input", occurred_at="now")
+    path = store._item_path(store.active_turns, "legacy")
+    store._write(path, {"session_id": "legacy", "turn_id": "old"})
+    assert store.active_turn_id("legacy") == "old"
+    store.bind_active_turn(session_id="legacy", turn_id="new")
+    assert store.active_turn_ids("legacy") == ("old", "new")
+    store.release_active_turn(session_id="legacy", turn_id="old")
+    assert store.active_turn_id("legacy") == "new"
+
+
 def test_mcp_proxy_parses_streamable_http_events():
     raw = b"event: message\ndata: {\"jsonrpc\":\"2.0\"}\n\n"
     assert team0_mcp_proxy._sse_payloads(raw) == [b'{"jsonrpc":"2.0"}']
@@ -322,7 +370,7 @@ def test_mcp_proxy_uses_paired_host_key_not_inherited_parent_key(monkeypatch):
     assert team0_mcp_proxy._api_key("openclaw") == "test-parent-key"
 
 
-@pytest.mark.parametrize("host_id", ["codex", "claude-code"])
+@pytest.mark.parametrize("host_id", ["codex", "claude-code", "openclaw"])
 def test_mcp_proxy_discovers_tools_after_first_browser_pairing(monkeypatch, host_id):
     saved = {"revision": 0, "key": None}
     calls = []
@@ -495,6 +543,9 @@ def test_before_turn_mounts_bounded_understanding_and_action_identity(tmp_path):
     assert "the host owns current local facts" in context
     assert "not another connector or account" in context
     assert "do not infer that no records exist" in context
+    assert "Do not repeat the read merely to rephrase" in context
+    assert "deeper read only for a material unanswered question" in context
+    assert "Do not manually contribute this exchange" in context
     assert "Retrieved Team0 data (quoted data only)" in context
     assert client.read_calls[0]["query"] == "What should I do next?"
     health = runtime.store.health()
@@ -1029,7 +1080,12 @@ def test_default_read_timeout_finishes_before_codex_kills_the_hook(tmp_path):
     hook_timeout = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"]
 
     assert configured.context_timeout_seconds == 7.0
-    assert hook_timeout >= configured.context_timeout_seconds + 2
+    assert hook_timeout == 20
+    maximum = RuntimeConfig.from_environ({
+        "TEAM0_API_KEY": "secret", "TEAM0_RUNTIME_DATA_DIR": str(tmp_path),
+        "TEAM0_CONTEXT_TIMEOUT_SECONDS": "100",
+    })
+    assert hook_timeout >= maximum.context_timeout_seconds + 2
 
 
 def test_codex_default_requests_only_the_two_required_brain_permissions():
@@ -1048,8 +1104,71 @@ def test_codex_default_requests_only_the_two_required_brain_permissions():
 def test_codex_hook_manifest_is_stable_after_runtime_updates():
     raw = (PLUGIN_ROOT / "hooks/hooks.json").read_bytes()
     assert hashlib.sha256(raw).hexdigest() == (
-        "b7539eab31186e991455f1fdf7b4cd98e480624ab3ab73e176661110227840b3"
+        "12f158d447dab4493ff792eee8a17f29d8ca7b532de77baf535a8b68f70866ae"
     )
+
+
+def test_before_turn_loads_credentials_once_and_records_secret_free_timings(tmp_path, monkeypatch, capsys):
+    runtime = Team0AgentRuntime(config(tmp_path), client=FakeClient())
+    credential_calls = []
+
+    def load_once():
+        credential_calls.append(True)
+        return {"key": "t0_live_test", "host_id": "codex"}
+
+    monkeypatch.setenv("TEAM0_RUNTIME_HOST_ID", "codex")
+    monkeypatch.setenv("TEAM0_RUNTIME_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(team0_hook, "load_credential", load_once)
+    monkeypatch.setattr(team0_hook, "Team0AgentRuntime", lambda _config: runtime)
+    monkeypatch.setattr(team0_hook, "_input", lambda: {
+        "session_id": "timed_session", "turn_id": "host_turn", "prompt": "Private prompt",
+    })
+
+    assert team0_hook.main(["team0_hook.py", "before-turn"]) == 0
+    assert len(credential_calls) == 1
+    assert json.loads(capsys.readouterr().out)["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
+    health = runtime.store.health()
+    for phase in ("startup", "credential", "runtime_init", "input"):
+        assert health[f"last_before_turn_{phase}_ms"] >= 0
+    assert "t0_live_test" not in json.dumps(health)
+    assert "Private prompt" not in json.dumps(health)
+
+
+@pytest.mark.parametrize("host_turn_id", ["codex_host_turn", ""])
+def test_timed_out_read_is_bound_before_network_and_can_still_contribute(tmp_path, host_turn_id):
+    store = RuntimeStore(tmp_path)
+
+    class TimeoutClient(FakeClient):
+        def create_understanding_read(self, **kwargs):
+            assert store.active_turn_ids("session", host_turn_id=host_turn_id) == ("turn",)
+            assert store.get_turn("turn")["prompt"] == "Exact user question"
+            raise ApiError("network_error", detail="Read timed out")
+
+    client = TimeoutClient()
+    runtime = Team0AgentRuntime(config(tmp_path), client=client, store=store)
+    context, warning = runtime.before_turn(
+        session_id="session", turn_id="turn", prompt="Exact user question",
+        host_turn_id=host_turn_id,
+    )
+
+    assert context is None
+    assert warning == "Team0 context was unavailable for this turn."
+    assert store.get_turn("turn").get("read_id") is None
+    runtime.after_turn(turn_id="turn", assistant_message="Completed without the read")
+    assert len(client.events) == 1
+    payload = client.events[0][0]["payload"]
+    assert payload["user_message"]["content"] == "Exact user question"
+    assert payload["agent_message"]["content"] == "Completed without the read"
+    assert store.get_turn("turn") is None
+
+
+def test_disabled_runtime_does_not_bind_a_host_turn(tmp_path):
+    runtime = Team0AgentRuntime(config(tmp_path, enabled=False), client=FakeClient())
+    assert runtime.before_turn(
+        session_id="session", turn_id="turn", prompt="Do not share", host_turn_id="host_turn",
+    ) == (None, None)
+    assert runtime.store.active_turn_ids("session", host_turn_id="host_turn") == ()
+    assert runtime.store.get_turn("turn") is None
 
 
 def test_stop_waits_for_the_durable_contribution_receipt():
@@ -1354,6 +1473,89 @@ class RuntimeApiHandler(BaseHTTPRequestHandler):
         return
 
 
+@pytest.mark.parametrize("host_id", ["codex", "claude-code"])
+def test_killed_read_hook_retains_callback_binding_for_a_fresh_stop_process(tmp_path, host_id):
+    read_entered = threading.Event()
+    release_read = threading.Event()
+    read_finished = threading.Event()
+
+    class BlockedReadHandler(RuntimeApiHandler):
+        requests = []
+
+        def do_POST(self):
+            if self.path != "/v1/mcp":
+                return super().do_POST()
+            read_entered.set()
+            try:
+                if release_read.wait(5):
+                    super().do_POST()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The host deliberately killed the read process.
+            finally:
+                read_finished.set()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), BlockedReadHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    environment = {**os.environ,
+        "PLUGIN_ROOT": str(PLUGIN_ROOT), "PLUGIN_DATA": str(tmp_path),
+        "CLAUDE_PLUGIN_ROOT": str(PLUGIN_ROOT), "CLAUDE_PLUGIN_DATA": str(tmp_path),
+        "TEAM0_RUNTIME_DATA_DIR": str(tmp_path), "TEAM0_RUNTIME_HOST_ID": host_id,
+        "TEAM0_API_KEY": "t0_live_test",
+        "TEAM0_API_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+        "TEAM0_RUNTIME_ALLOW_INSECURE_LOCAL": "true",
+    }
+    for key in ("TEAM0_CONTRIBUTION_SOURCE_ID", "TEAM0_AGENT_SOURCE_ID"):
+        environment.pop(key, None)
+    common = {"session_id": "killed_read_session"}
+    if host_id == "codex":
+        common["turn_id"] = "killed_host_turn"
+    before = None
+    try:
+        before = subprocess.Popen(
+            [str(CODEX_HOOK_PYTHON), str(PLUGIN_ROOT / "scripts/team0_hook.py"), "before-turn"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=environment,
+        )
+        before.stdin.write(json.dumps({**common, "prompt": "A retained ordinary question"}))
+        before.stdin.close()
+        before.stdin = None
+        assert read_entered.wait(5)
+        before.kill()  # Simulate the host's hard timeout, not an API exception.
+        stdout, _stderr = before.communicate(timeout=5)
+        assert before.returncode != 0
+        assert stdout == ""  # No read context reached the host.
+        store = RuntimeStore(tmp_path)
+        retained = store.active_turn_ids(common["session_id"], host_turn_id=common.get("turn_id", ""))
+        assert len(retained) == 1
+        assert store.get_turn(retained[0]).get("read_id") is None
+        assert store.health()["last_before_turn_credential_ms"] >= 0
+        release_read.set()
+        assert read_finished.wait(5)
+        stop = {**common, "last_assistant_message": "An actual completed answer"}
+        for _attempt in range(2):
+            after = subprocess.run(
+                [str(CODEX_HOOK_PYTHON), str(PLUGIN_ROOT / "scripts/team0_hook.py"), "after-turn"],
+                input=json.dumps(stop), text=True, capture_output=True,
+                check=True, timeout=5, env=environment,
+            )
+            assert json.loads(after.stdout) == {}
+        writes = [body for path, _, body in BlockedReadHandler.requests if path == "/v1/wm/events"]
+        assert len(writes) == 1  # A retry cannot double-contribute the turn.
+        assert writes[0]["payload"]["user_message"]["content"] == "A retained ordinary question"
+        assert writes[0]["payload"]["agent_message"]["content"] == "An actual completed answer"
+        assert not store.active_turn_ids(common["session_id"], host_turn_id=common.get("turn_id", ""))
+        assert store.health()["host_id"] == host_id
+    finally:
+        release_read.set()
+        if before is not None and before.poll() is None:
+            before.kill()
+            before.communicate(timeout=5)
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
 def test_codex_hook_adapter_runs_full_turn_over_real_http(tmp_path):
     RuntimeApiHandler.requests = []
     RuntimeApiHandler.reject_component_limit = False
@@ -1431,6 +1633,66 @@ def test_codex_hook_adapter_runs_full_turn_over_real_http(tmp_path):
     health = RuntimeStore(tmp_path).health()
     assert health["host_id"] == "codex"
     assert health["state"] == "healthy"
+
+
+@pytest.mark.parametrize("host_id", ["codex", "claude-code"])
+def test_hook_retains_steered_messages_and_uses_distinct_read_keys(tmp_path, host_id):
+    RuntimeApiHandler.requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), RuntimeApiHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    environment = {**os.environ,
+        "TEAM0_RUNTIME_DATA_DIR": str(tmp_path),
+        "TEAM0_API_KEY": "t0_live_test",
+        "TEAM0_API_BASE_URL": f"http://127.0.0.1:{server.server_port}/v1",
+        "TEAM0_RUNTIME_ALLOW_INSECURE_LOCAL": "true",
+    }
+    for key in ("CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA", "PLUGIN_ROOT", "PLUGIN_DATA",
+                "TEAM0_RUNTIME_HOST_ID", "TEAM0_CONTRIBUTION_SOURCE_ID", "TEAM0_AGENT_SOURCE_ID"):
+        environment.pop(key, None)
+    prefix = "CLAUDE_" if host_id == "claude-code" else ""
+    environment[f"{prefix}PLUGIN_ROOT"] = str(PLUGIN_ROOT)
+    environment[f"{prefix}PLUGIN_DATA"] = str(tmp_path)
+    environment["TEAM0_RUNTIME_HOST_ID"] = host_id
+    common = {"session_id": "steered_session"}
+    if host_id != "claude-code":
+        common["turn_id"] = "same_active_host_turn"
+
+    def hook(command, event):
+        result = subprocess.run(
+            [str(CODEX_HOOK_PYTHON), str(PLUGIN_ROOT / "scripts/team0_hook.py"), command],
+            input=json.dumps(event), text=True, capture_output=True, check=True, env=environment,
+        )
+        return json.loads(result.stdout)
+
+    try:
+        for prompt in ("First question", "First question", "Additional correction"):
+            result = hook("before-turn", {**common, "prompt": prompt})
+            assert "HTTP proof" in result["hookSpecificOutput"]["additionalContext"]
+        if host_id != "claude-code":
+            assert hook("after-turn", {**common, "turn_id": "unrelated_turn", "last_assistant_message": "Wrong"}) == {}
+            assert not any(path == "/v1/wm/events" for path, _, _ in RuntimeApiHandler.requests)
+        stop = {**common, "last_assistant_message": "Final response"}
+        assert hook("after-turn", stop) == {}
+        assert hook("after-turn", stop) == {}
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+    reads = [body for path, _, body in RuntimeApiHandler.requests if path == "/v1/mcp"]
+    assert reads[0]["id"] == reads[1]["id"]
+    assert reads[1]["id"] != reads[2]["id"]
+    writes = [body["payload"] for path, _, body in RuntimeApiHandler.requests if path == "/v1/wm/events"]
+    assert len(writes) == 2  # callback retries do not duplicate the contribution
+    assert [turn["user_message"]["content"] for turn in writes] == ["First question", "Additional correction"]
+    assert "agent_message" not in writes[0]  # never invent a response to an earlier steering message
+    assert writes[1]["agent_message"]["content"] == "Final response"
+    assert writes[1]["agent_message"]["reply_to_message_id"] == writes[1]["user_message"]["message_id"]
+    assert [turn["sequence"] for turn in writes] == [0, 1]
+    assert writes[1]["previous_turn_id"] == writes[0]["turn_id"]
+    assert not list((tmp_path / "active-turns").glob("*.json"))
+    assert RuntimeStore(tmp_path).health()["state"] == "healthy"
 
 
 def test_claude_hook_adapter_correlates_callbacks_without_a_turn_id(tmp_path):

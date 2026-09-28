@@ -70,28 +70,51 @@ class RuntimeStore:
     def get_turn(self, turn_id: str) -> Mapping[str, Any] | None:
         return self._read(self._item_path(self.turns, turn_id))
 
-    def bind_active_turn(self, *, session_id: str, turn_id: str) -> None:
-        """Correlate lifecycle callbacks for hosts without a shared turn ID."""
+    def bind_active_turn(
+        self, *, session_id: str, turn_id: str, host_turn_id: str = ""
+    ) -> None:
+        """Retain each submitted message until its host turn finishes."""
 
+        key = stable_id("hostactive", session_id, host_turn_id) if host_turn_id else session_id
         with self._locked():
+            path = self._item_path(self.active_turns, key)
+            existing = self._read(path) or {}
+            turn_ids = list(existing.get("turn_ids") or ([existing["turn_id"]] if existing.get("turn_id") else []))
+            if turn_id not in turn_ids:
+                turn_ids.append(turn_id)
+            turn_ids.sort(key=lambda item: int((self.get_turn(item) or {}).get("sequence", -1)))
             self._write(
-                self._item_path(self.active_turns, session_id),
-                {"session_id": session_id, "turn_id": turn_id},
+                path,
+                {"session_id": session_id, "turn_id": turn_ids[-1], "turn_ids": turn_ids},
             )
 
     def active_turn_id(self, session_id: str) -> str | None:
-        value = self._read(self._item_path(self.active_turns, session_id))
-        turn_id = (value or {}).get("turn_id")
-        return str(turn_id) if turn_id else None
+        turn_ids = self.active_turn_ids(session_id)
+        return turn_ids[-1] if turn_ids else None
 
-    def release_active_turn(self, *, session_id: str, turn_id: str) -> None:
+    def active_turn_ids(self, session_id: str, *, host_turn_id: str = "") -> tuple[str, ...]:
+        key = stable_id("hostactive", session_id, host_turn_id) if host_turn_id else session_id
+        value = self._read(self._item_path(self.active_turns, key)) or {}
+        return tuple(value.get("turn_ids") or ([value["turn_id"]] if value.get("turn_id") else []))
+
+    def release_active_turn(
+        self, *, session_id: str, turn_id: str, host_turn_id: str = ""
+    ) -> None:
         """Release only the mapping owned by this completed callback."""
 
-        path = self._item_path(self.active_turns, session_id)
+        key = stable_id("hostactive", session_id, host_turn_id) if host_turn_id else session_id
+        path = self._item_path(self.active_turns, key)
         with self._locked():
             value = self._read(path)
-            if value and value.get("turn_id") == turn_id:
-                path.unlink(missing_ok=True)
+            if value:
+                turn_ids = list(value.get("turn_ids") or [value.get("turn_id")])
+                if turn_id not in turn_ids:
+                    return
+                turn_ids.remove(turn_id)
+                if turn_ids:
+                    self._write(path, {"session_id": session_id, "turn_id": turn_ids[-1], "turn_ids": turn_ids})
+                else:
+                    path.unlink(missing_ok=True)
 
     def attach_understanding_read(
         self,

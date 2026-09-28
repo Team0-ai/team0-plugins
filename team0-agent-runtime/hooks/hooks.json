@@ -21,7 +21,7 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/scripts/team0_hook.py\" before-turn",
             "commandWindows": "& \"$env:PLUGIN_ROOT\\scripts\\team0_hook.ps1\" before-turn",
-            "timeout": 10,
+            "timeout": 20,
             "statusMessage": "Loading your Team0 understanding",
             "additionalContextLimit": 8000
           }

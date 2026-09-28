@@ -12,6 +12,7 @@ LOCAL_EVIDENCE_CONTRACT = "team0.local_evidence.v1"
 
 TURN_POLICY = """Team0 owns cross-session direction; the host owns current local facts.
 - This block was read through this runtime's Team0 connection; its after-turn hook submits completed turns. Missing details are not proof of missing memory. Use this runtime's Team0 tools for a deeper read, not another connector or account. If those tools are unavailable or denied, state that limitation; do not infer that no records exist or silently switch to a different Team0 connector.
+- Use the understanding already loaded here. Do not repeat the read merely to rephrase the same request or check that the hook worked. Request a deeper read only for a material unanswered question. Do not manually contribute this exchange; the after-turn hook owns that submission.
 - Choose local evidence from meaning, never trigger words.
 - Anchor on Team0. Use local evidence only if current host state could change the concrete next step; allow one narrow verification batch.
 - Local evidence may refine or verify Team0 direction and confirm completion or blockage, but must not silently replace explicit Team0 direction.
