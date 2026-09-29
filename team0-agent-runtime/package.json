@@ -1,6 +1,6 @@
 {
   "name": "team0-agent-runtime",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "openclaw": {
     "extensions": ["./openclaw/index.mjs"],

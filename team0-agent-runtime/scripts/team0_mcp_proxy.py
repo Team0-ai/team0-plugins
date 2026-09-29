@@ -26,11 +26,11 @@ SCRIPT_ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_ROOT))
 
 from credential_store import load_credential  # noqa: E402
-from host_profile import candidate_roots, detect_host_id, host_credential  # noqa: E402
+from host_profile import candidate_roots, detect_host_id, host_credential, local_pairing_unavailable_reason  # noqa: E402
 
 
 DEFAULT_BASE_URL = "https://api.team0.ai/v1"
-RUNTIME_VERSION = "0.1.3"
+RUNTIME_VERSION = "0.1.4"
 # The Team0 endpoint exposes the modern 2026 adapter for direct runtime calls,
 # but its Streamable HTTP MCP handshake currently accepts the legacy versions
 # that Codex sends.  Keep the bridge on the negotiated MCP session version.
@@ -195,7 +195,7 @@ class PairingAwareMcpBridge:
                     "protocolVersion": version if version in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": True}},
                     "serverInfo": {"name": "team0-agent-runtime", "version": RUNTIME_VERSION},
-                    "instructions": "Team0 awaits browser approval. Do not substitute another connector or account. Tools refresh after pairing.",
+                    "instructions": local_pairing_unavailable_reason(self.host_id) or "Team0 awaits browser approval. Do not substitute another connector or account. Tools refresh after pairing.",
                 })
             for index, payload in enumerate(payloads):
                 response = json.loads(payload)
@@ -214,7 +214,7 @@ class PairingAwareMcpBridge:
                 return self._result(message, {"tools": []})
             if method == "ping":
                 return self._result(message, {})
-            return [_error_response(message, "Approve this host's Team0 connection in the browser first; do not use another connector's grant.")]
+            return [_error_response(message, local_pairing_unavailable_reason(self.host_id) or "Approve this host's Team0 connection in the browser first; do not use another connector's grant.")]
 
         if not self._remote_initialized:
             if not self._initialize:

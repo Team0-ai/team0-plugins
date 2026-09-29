@@ -54,6 +54,105 @@ PAIRING = importlib.util.module_from_spec(PAIRING_SPEC)
 PAIRING_SPEC.loader.exec_module(PAIRING)
 
 
+@pytest.mark.parametrize("host_id,marker,blocked", [
+    ("claude-code", "true", True),
+    ("claude-code", "false", False),
+    ("claude-code", "", False),
+    ("codex", "true", False),
+    ("openclaw", "true", False),
+])
+def test_cloud_pairing_guard_is_host_scoped(host_id, marker, blocked):
+    reason = host_profile.local_pairing_unavailable_reason(
+        host_id, {"CLAUDE_CODE_REMOTE": marker, "REMOTE_CONTROL": "true"},
+    )
+    assert bool(reason) is blocked
+    if blocked:
+        assert "same computer" in reason
+        assert "support is not verified" in reason
+        assert "Do not substitute" in reason
+
+
+def test_direct_cloud_pairing_exits_before_browser_socket_or_credential_write(monkeypatch, capsys):
+    monkeypatch.setenv("TEAM0_RUNTIME_HOST_ID", "claude-code")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("cloud pairing must not start a local callback or change credentials")
+
+    monkeypatch.setattr(PAIRING, "ThreadingHTTPServer", forbidden)
+    monkeypatch.setattr(PAIRING, "_open_connect_url", forbidden)
+    monkeypatch.setattr(PAIRING, "_pairing_lock", forbidden)
+    monkeypatch.setattr(PAIRING, "store_credential", forbidden)
+    assert PAIRING.main() == 1
+    assert "Claude Code cloud session" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["connect", "before-turn", "after-turn"])
+def test_unpaired_cloud_hooks_do_not_launch_pairing_or_call_team0(command, monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("TEAM0_RUNTIME_HOST_ID", "claude-code")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.delenv("TEAM0_API_KEY", raising=False)
+    monkeypatch.delenv("TEAM0_ACCESS_KEY", raising=False)
+    monkeypatch.setattr(team0_hook, "load_credential", lambda: None)
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("unpaired cloud hooks must not launch pairing, read, or contribute")
+
+    monkeypatch.setattr(team0_hook, "_start_pairing", forbidden)
+    monkeypatch.setattr(team0_hook, "Team0AgentRuntime", forbidden)
+    assert team0_hook.main(["team0_hook.py", command]) == 0
+    output = json.loads(capsys.readouterr().out)
+    if command == "after-turn":
+        assert output == {}
+    else:
+        assert "Claude Code cloud session" in output["systemMessage"]
+        assert "page just opened" not in output["systemMessage"]
+    assert not list(tmp_path.iterdir())
+
+
+def test_cloud_pairing_launcher_is_guarded_even_when_called_directly(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setattr(team0_hook.subprocess, "Popen", lambda *_args, **_kwargs: pytest.fail("must not spawn"))
+    assert team0_hook._start_pairing("claude-code") is False
+
+
+def test_cloud_self_test_explains_unavailable_local_pairing(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setattr(team0_hook, "load_credential", lambda: None)
+    assert team0_hook._self_test("claude-code") == 1
+    result = json.loads(capsys.readouterr().out)
+    assert result["local_pairing_supported"] is False
+    assert result["connection_ready"] is False
+    assert "Claude Code cloud session" in result["next_action"]
+
+
+def test_unpaired_cloud_mcp_is_discoverable_and_does_not_promise_browser_approval(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setattr(team0_mcp_proxy, "_api_key", lambda _host: None)
+    bridge = team0_mcp_proxy.PairingAwareMcpBridge("claude-code")
+    initialized = json.loads(bridge.forward({"id": 1, "method": "initialize", "params": {}})[0])
+    assert "Claude Code cloud session" in initialized["result"]["instructions"]
+    tools = json.loads(bridge.forward({"id": 2, "method": "tools/list"})[0])
+    assert tools["result"]["tools"] == []
+    called = json.loads(bridge.forward({"id": 3, "method": "tools/call", "params": {}})[0])
+    assert "same computer" in called["error"]["message"]
+
+
+def test_existing_explicit_cloud_credential_is_not_disabled_or_replaced(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("TEAM0_RUNTIME_HOST_ID", "claude-code")
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    monkeypatch.setenv("CLAUDE_PLUGIN_DATA", str(tmp_path))
+    monkeypatch.setenv("TEAM0_API_KEY", "t0_test_explicit_cloud")
+    monkeypatch.setattr(team0_hook, "load_credential", lambda: None)
+    monkeypatch.setattr(team0_hook, "_credential_is_revoked", lambda: False)
+    monkeypatch.setattr(team0_hook, "_start_pairing", lambda *_args: pytest.fail("must not re-pair"))
+    assert team0_hook.main(["team0_hook.py", "connect"]) == 0
+    assert os.environ["TEAM0_API_KEY"] == "t0_test_explicit_cloud"
+    assert capsys.readouterr().out == ""
+
+
 def test_pairing_uses_native_macos_launcher_when_webbrowser_does_not_open(monkeypatch):
     calls = []
     monkeypatch.setattr(PAIRING.sys, "platform", "darwin")

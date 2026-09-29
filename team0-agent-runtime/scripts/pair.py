@@ -23,7 +23,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "runtime"))
 
 from team0_agent_runtime import ApiError, Team0ApiClient  # noqa: E402
 from credential_store import load_credential, store_credential  # noqa: E402
-from host_profile import current_root, detect_host_id  # noqa: E402
+from host_profile import current_root, detect_host_id, local_pairing_unavailable_reason  # noqa: E402
 from pairing_status import write_status  # noqa: E402
 
 
@@ -203,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
     named = arguments[arguments.index("--host") + 1] if "--host" in arguments[:-1] else ""
     host_id = named.strip() or detect_host_id()
+    unavailable_reason = local_pairing_unavailable_reason(host_id)
+    if unavailable_reason:
+        print(unavailable_reason, file=sys.stderr)
+        return 1
     credential_root = current_root(host_id)
     with _pairing_lock(credential_root / "pairing.lock") as acquired:
         if not acquired:

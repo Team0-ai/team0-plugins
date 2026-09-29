@@ -94,6 +94,30 @@ def detect_host_id(environ: Mapping[str, str] | None = None) -> str:
     return DEFAULT_HOST.id
 
 
+def local_pairing_unavailable_reason(
+    host_id: str, environ: Mapping[str, str] | None = None,
+) -> str | None:
+    """Explain a known remote environment before opening a localhost callback.
+
+    Claude Remote Control is a window onto a local process; only the documented
+    cloud VM marker means the browser and plugin live on different machines.
+    Existing explicitly configured credentials are not disabled by this check.
+    """
+
+    env = os.environ if environ is None else environ
+    if host_id != "claude-code" or str(env.get("CLAUDE_CODE_REMOTE", "")).lower() != "true":
+        return None
+    return (
+        "This is a Claude Code cloud session. Team0's automatic plugin connection "
+        "requires Claude Code and your browser on the same computer. Open Claude "
+        "Desktop > Code > Local, or your terminal/IDE, and install Team0 there. "
+        "Allowing team0.ai alone will not fix local browser sign-in in the cloud. "
+        "Cloud Code connector support is not verified yet. To use ordinary Claude "
+        "Chat instead, choose Claude.ai in Team0 > Agents and approve that separate "
+        "connection yourself. Do not substitute another connector's credentials."
+    )
+
+
 def data_root(host_id: str, environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     host = profile(host_id)

@@ -31,6 +31,7 @@ from host_profile import (  # noqa: E402
     data_root,
     detect_host_id,
     host_credential,
+    local_pairing_unavailable_reason,
 )
 
 
@@ -74,6 +75,8 @@ def _load_saved_credential(host_id: str) -> str | None:
 
 
 def _start_pairing(host_id: str) -> bool:
+    if local_pairing_unavailable_reason(host_id):
+        return False
     platform_options = (
         {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
         if os.name == "nt"
@@ -169,6 +172,8 @@ def _diagnostics(host_id: str) -> Mapping[str, Any]:
             "pairing": (PLUGIN_ROOT / "scripts" / "pair.py").is_file(),
         },
         "launcher": _launcher_name(),
+        "local_pairing_supported": local_pairing_unavailable_reason(host_id) is None,
+        "pairing_guidance": local_pairing_unavailable_reason(host_id),
         "credential_present": bool(saved and str(saved.get("host_id") or host_id) == host_id),
         "pairing": {
             "status_file": str(status_path(root)),
@@ -188,6 +193,7 @@ def _self_test(host_id: str) -> int:
         and manifest.get("valid")
         and all(scripts.values())
         and diagnostics["launcher"] != "unavailable"
+        and diagnostics["local_pairing_supported"]
     )
     print(
         json.dumps(
@@ -195,9 +201,11 @@ def _self_test(host_id: str) -> int:
                 "checks_passed": checks_passed,
                 "connection_ready": bool(diagnostics["credential_present"]),
                 "next_action": (
-                    "start a new conversation; Team0 will run automatically"
-                    if diagnostics["credential_present"]
-                    else "pair this host once from Team0"
+                    diagnostics["pairing_guidance"] or (
+                        "start a new conversation; Team0 will run automatically"
+                        if diagnostics["credential_present"]
+                        else "pair this host once from Team0"
+                    )
                 ),
                 **diagnostics,
             },
@@ -261,6 +269,12 @@ def main(argv: list[str]) -> int:
     credential_started = time.monotonic()
     saved_key = _load_saved_credential(host_id)
     credential_ms = round((time.monotonic() - credential_started) * 1000, 1)
+    unavailable_reason = local_pairing_unavailable_reason(host_id)
+    if unavailable_reason and not saved_key and command in {"connect", "before-turn", "after-turn"}:
+        # No detached process, socket, browser promise, read or contribution in
+        # an unpaired cloud VM. Keep Claude's ordinary turn non-blocking.
+        _output(warning=unavailable_reason if command != "after-turn" else None)
+        return 0
     if command == "connect":
         # A session that starts unconnected should say so at once, rather than
         # waiting for a first message to discover it and open the browser then.
@@ -269,7 +283,7 @@ def main(argv: list[str]) -> int:
                 return 0
             launched = _start_pairing(host_id)
             _output(
-                warning=(
+                warning=unavailable_reason or (
                     "Team0 access ended. A fresh Team0 connection page opened in your "
                     "browser; reconnect there to restore this host."
                     if launched
