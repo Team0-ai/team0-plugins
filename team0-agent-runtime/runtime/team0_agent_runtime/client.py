@@ -131,6 +131,35 @@ class Team0ApiClient:
             raise ApiError("protocol.invalid_runtime_binding", status=502)
         return binding
 
+    def work_tool(self, name: str, arguments: Mapping[str, Any], *, request_id: str) -> Mapping[str, Any]:
+        """Shared work uses the same authenticated MCP connection as understanding."""
+        if name not in {'work_read', 'work_report', 'work_manage'}:
+            raise ValueError('Unsupported work tool')
+        response = self._request('POST', '/mcp', body={
+            'jsonrpc': '2.0', 'id': request_id, 'method': 'tools/call',
+            'params': {'name': name, 'arguments': dict(arguments)},
+        }, headers={'Accept': 'application/json, text/event-stream',
+                    'MCP-Protocol-Version': '2026-07-28', 'Mcp-Method': 'tools/call', 'Mcp-Name': name},
+            timeout=self._read_timeout if name == 'work_read' else self._write_timeout)
+        result = response.body.get('result')
+        if not isinstance(result, Mapping) or result.get('isError'):
+            raise ApiError('work.read_or_command_rejected', status=409)
+        structured = result.get('structuredContent')
+        if not isinstance(structured, Mapping):
+            for item in result.get('content', []):
+                if item.get('type') == 'text':
+                    try:
+                        structured = json.loads(item.get('text', ''))
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(structured, Mapping):
+                        break
+        if not isinstance(structured, Mapping):
+            raise ApiError('work.invalid_response', status=502)
+        if structured.get('error'):
+            raise ApiError(str(structured['error']), status=structured.get('status', 409))
+        return structured
+
     def ingest_event(
         self, *, event: Mapping[str, Any], idempotency_key: str
     ) -> Mapping[str, Any]:

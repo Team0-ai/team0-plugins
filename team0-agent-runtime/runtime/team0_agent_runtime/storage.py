@@ -70,6 +70,16 @@ class RuntimeStore:
     def get_turn(self, turn_id: str) -> Mapping[str, Any] | None:
         return self._read(self._item_path(self.turns, turn_id))
 
+    def bind_work(self, session_id: str, action_id: str | None, connection_id: str) -> None:
+        """Explicit session binding, separate from session history and turn inference."""
+        with self._locked():
+            self._write(self.root / (stable_id('work', session_id) + '.json'),
+                        {'action_id': action_id, 'connection_id': connection_id})
+
+    def active_work(self, session_id: str, connection_id: str) -> str | None:
+        value = self._read(self.root / (stable_id('work', session_id) + '.json')) or {}
+        return value.get('action_id') if value.get('connection_id') == connection_id else None
+
     def bind_active_turn(
         self, *, session_id: str, turn_id: str, host_turn_id: str = ""
     ) -> None:

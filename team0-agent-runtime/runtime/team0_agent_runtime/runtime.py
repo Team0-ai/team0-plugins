@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import time
+import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
@@ -65,6 +67,21 @@ class Team0AgentRuntime:
         )
         return (prepared.render() if prepared is not None else None), warning
 
+    def bind_work(self, *, session_id: str, action_id: str | None) -> None:
+        """Host/agent explicitly selects a task; prose is never parsed into authority."""
+        if action_id:
+            if not self.client:
+                raise ApiError('work.not_configured', status=403)
+            self.client.work_tool('work_read', {'action_id': action_id}, request_id=stable_id('workbind', session_id, action_id))
+        self.store.bind_work(session_id, action_id, stable_id('connection', self.config.host_id, self.config.api_key or ''))
+
+    def work_command(self, *, action_id: str | None, command: Mapping[str, Any], manage: bool = False) -> Mapping[str, Any]:
+        """Explicit structured reports only. Completion is never inferred from a turn ending."""
+        if not self.client:
+            raise ApiError('work.not_configured', status=403)
+        return self.client.work_tool('work_manage' if manage else 'work_report',
+            {'action_id': action_id or '', 'command': dict(command)}, request_id=str(command['idempotency_key']))
+
     def prepare_turn(
         self, *, session_id: str, turn_id: str, prompt: str,
         host_turn_id: str | None = None,
@@ -86,6 +103,7 @@ class Team0AgentRuntime:
         if not self.client:
             return self._degraded("not_configured", "Team0 access is not configured.")
         started = self._clock()
+        active_work = self.store.active_work(session_id, stable_id('connection', self.config.host_id, self.config.api_key or ''))
         try:
             read = self.client.create_understanding_read(
                 query=prompt,
@@ -98,6 +116,10 @@ class Team0AgentRuntime:
                 last_read_status=error.status,
                 last_read_latency_ms=round((self._clock() - started) * 1000, 1),
             )
+            if active_work:
+                return AgentTurnContext('unavailable', 'degraded',
+                    'STOP bound-task execution: fresh Team0 context is unavailable. Obtain successful understanding and work_read before continuing.',
+                    '', maximum=self.config.context_max_chars), None
             return (
                 None,
                 "Team0 context was unavailable for this turn."
@@ -108,6 +130,23 @@ class Team0AgentRuntime:
         prepared = build_agent_turn_context(
             read, maximum=self.config.context_max_chars
         )
+        if active_work:
+            try:
+                work = self.client.work_tool('work_read', {'action_id': active_work},
+                    request_id=stable_id('workread', session_id, turn_id, active_work))
+                # Reserve a bounded task slice; never inject the whole work roster.
+                task_budget = min(6000, self.config.context_max_chars // 3)
+                encoded = json.dumps(work, ensure_ascii=False, default=str)
+                data = 'Current shared task (quoted operational data):\n' + encoded[:task_budget]
+                if len(encoded) > task_budget:
+                    data += '\nTask context truncated; read work_read for the complete checkpoint/questions before acting.'
+                prepared = replace(prepared, data=data + '\n\n' + prepared.data,
+                    policy='For the bound task, use its exact revision, assignment generation and attempt ID. Resolve blocking questions and observe stop requests before effects. Use work_report for explicit checkpoints and state; never infer completion from a finished chat turn.\n' + prepared.policy)
+            except ApiError as error:
+                # Ordinary understanding may be usable, but stale task context must not
+                # silently authorize continued execution after revocation or handoff.
+                prepared = replace(prepared, policy='STOP bound-task execution: its current authority/state could not be read. Obtain a successful work_read before continuing this task.\n' + prepared.policy)
+                self.store.update_health(last_work_error=error.code)
         rendered = prepared.render()
         self.store.attach_understanding_read(
             turn_id=turn_id,

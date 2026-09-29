@@ -352,3 +352,58 @@ authorize a tool, source, action, meeting, message, or delivery. The saved serve
 remains the sole authority source. This lets installers and the Team0 UI present honest states such
 as automatic, polling-only, adapter pending, Team0-notetaker bridge, or unavailable without adding
 vendor-specific branches.
+
+## Shared tasks (explicit task grant required)
+
+Shared tasks use the existing `unified_actions` authority. A maintained checkpoint
+and questions travel with the exact task ID; there is no required local MD truth.
+Ordinary conversation contribution does not authorize task writes. The owner grants
+assigned-task reporting or coordination in the agent connection settings. Server
+feature enrollment and current grant validity are checked on every call.
+
+MCP exposes `work_read`, `work_report`, `work_manage`. Read before acting. Commands
+use `{command, idempotency_key, expected_revision, payload}`; worker mutations also
+supply `assignment_generation` and the current `attempt_id` once started. Reuse the
+same idempotency key and unchanged body for a transport retry. A revision conflict
+requires a fresh read and an intentional new command, never blind overwrite.
+
+Typical worker sequence: read offer → accept → start → checkpoint/report → ask if
+blocked → read answer → mark decision applied → resume → save output/report done →
+stop_ack. `reported_done` is not verified completion. Only the owner, or an explicitly
+authorized independent coordinator after review, can complete the task. Pause/cancel
+are stop requests; acknowledge actual stopping and whether effects are settled.
+Unknown provider effects must be reconciled before another attempt/handoff.
+
+A coordinator can create tasks, assign authorized roster agents, route questions,
+change direction and hand off settled work. `assign` optionally accepts a timezone-aware
+`expires_at`; acceptance after that instant fails. New assignments do not wake a
+session-only host. Poll `work_read` when the host next runs, or integrate the existing
+signed task-change webhook as a wake signal and reread with current credentials.
+
+Bind a host session explicitly after reading/accepting its exact task:
+
+```python
+runtime.bind_work(session_id=host_session_id, action_id=task_id)
+```
+
+The shared lifecycle then adds only that task's bounded current context to future
+turns, retaining checkpoint/questions across restarts. Another session/credential
+does not inherit it. Failed authority/context reads instruct the host to stop the
+bound task. Enforcement of external effects still belongs to the host's action policy.
+
+CLI equivalents in the installed plugin:
+
+```sh
+python3 scripts/work.py bind --session SESSION --action TASK_UUID
+python3 scripts/work.py read --action TASK_UUID
+python3 scripts/work.py report --action TASK_UUID < command.json
+python3 scripts/work.py manage --action TASK_UUID < command.json
+python3 scripts/work.py unbind --session SESSION
+```
+
+Use the host's existing configured connection; never search another account's keys.
+`save_output` stores outputs in the existing artifact library; update requires the
+`updated_at` token returned by task-scoped output reads. Hooks do not infer completion
+from a finished chat turn or infer assignment from task prose. Backend commands and
+common runtime behavior are locally tested; live-host wake/cancel and cross-host
+end-to-end acceptance remain separate rollout gates.
