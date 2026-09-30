@@ -24,6 +24,15 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+
+#: Turns the host generates about its own background work (Claude Code's task notices).
+_HOST_NOTICE_TAGS = ("<task-notification>",)
+
+
+def _is_host_notice(prompt: str) -> bool:
+    return str(prompt or "").lstrip().startswith(_HOST_NOTICE_TAGS)
+
+
 class Team0AgentRuntime:
     def __init__(
         self,
@@ -110,6 +119,9 @@ class Team0AgentRuntime:
             )
         if not self.client:
             return self._degraded("not_configured", "Team0 access is not configured.")
+        if _is_host_notice(prompt):
+            # The host reporting its own background work, not a person asking something.
+            return None, None
         started = self._clock()
         active_work = self.store.active_work(session_id, stable_id('connection', self.config.host_id, self.config.api_key or ''))
         try:

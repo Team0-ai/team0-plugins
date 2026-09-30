@@ -2086,3 +2086,17 @@ def test_one_hook_file_serves_every_host():
         command = handlers[0]["hooks"][0]["command"]
         # Either host's root variable resolves; neither host sets the other's.
         assert "${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}" in command, event
+
+
+def test_host_background_notice_is_not_sent_as_a_question(tmp_path):
+    client = FakeClient()
+    runtime = Team0AgentRuntime(config(tmp_path), client=client)
+
+    prepared, warning = runtime.prepare_turn(
+        session_id="notice_session",
+        turn_id="notice_turn",
+        prompt="<task-notification>\n<task-id>b7n0udkl4</task-id>\n<status>completed</status>\n</task-notification>",
+    )
+
+    assert (prepared, warning) == (None, None)
+    assert client.read_calls == []
