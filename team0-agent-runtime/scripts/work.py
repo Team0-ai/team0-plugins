@@ -3,7 +3,7 @@
 
 Examples: work.py bind --session SESSION --action TASK_UUID
           work.py unbind --session SESSION
-          work.py report --action TASK_UUID < command.json
+          work.py report --session SESSION --action TASK_UUID < command.json
 All access uses this host's existing connection. Never supplies another account's key.
 """
 import argparse
@@ -20,6 +20,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('operation', choices=['bind', 'unbind', 'read', 'report', 'manage'])
     parser.add_argument('--session')
+    parser.add_argument('--session-label', default='')
     parser.add_argument('--action')
     args = parser.parse_args()
     host = _host_id()
@@ -37,7 +38,10 @@ def main():
                 raise ApiError('work.not_configured', status=403)
             result = runtime.client.work_tool('work_read', {'action_id': args.action or ''}, request_id='work-read')
         else:
-            result = runtime.work_command(action_id=args.action, command=json.load(sys.stdin), manage=args.operation == 'manage')
+            if not args.session:
+                parser.error('Work commands require this host conversation\'s --session')
+            result = runtime.work_command(action_id=args.action, command=json.load(sys.stdin), manage=args.operation == 'manage',
+                session_id=args.session, session_label=args.session_label)
         print(json.dumps(result, ensure_ascii=False, default=str))
     except ApiError as error:
         print(json.dumps({'error': error.code, 'status': error.status}))

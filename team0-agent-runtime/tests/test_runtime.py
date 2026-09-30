@@ -670,7 +670,8 @@ def test_prepare_turn_exposes_policy_and_data_separately_for_any_host(tmp_path):
     assert warning is None
     assert isinstance(prepared, AgentTurnContext)
     assert prepared.contract == TURN_CONTEXT_CONTRACT
-    assert prepared.policy == TURN_POLICY
+    assert prepared.policy.endswith(TURN_POLICY)
+    assert 'conversation\'s session_id is worksession_' in prepared.policy
     assert prepared.local_evidence == LOCAL_EVIDENCE_POLICY
     assert prepared.local_evidence.contract == LOCAL_EVIDENCE_CONTRACT
     assert prepared.local_evidence.direction_answer_max_batches == 1

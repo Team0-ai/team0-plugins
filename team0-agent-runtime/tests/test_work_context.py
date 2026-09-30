@@ -59,3 +59,48 @@ def test_understanding_outage_cannot_silently_drop_bound_task_fence(tmp_path):
     value, _ = runtime.before_turn(session_id='session', turn_id='turn', prompt='Continue')
     assert 'STOP bound-task execution' in value
     assert len(value) <= 1500
+
+
+def test_work_claim_uses_stable_distinct_host_sessions_and_binds_on_success(tmp_path):
+    config = RuntimeConfig(api_key='key', data_dir=tmp_path, host_id='codex')
+    client = Client()
+    runtime = Team0AgentRuntime(config, client=client)
+    command = {'command':'accept', 'idempotency_key':'accept-A'}
+    runtime.work_command(action_id='task', command=command, session_id='A', session_label='Website')
+    first = client.calls[-1][1]['session_id']
+    restarted = Team0AgentRuntime(config, client=client)
+    restarted.work_command(action_id='task', command=command, session_id='A')
+    assert client.calls[-1][1]['session_id'] == first
+    restarted.work_command(action_id='other-task', command=command, session_id='B')
+    assert client.calls[-1][1]['session_id'] != first
+    other_host = Team0AgentRuntime(RuntimeConfig(api_key='key', data_dir=tmp_path / 'claude', host_id='claude-code'), client=client)
+    other_host.work_command(action_id='task', command=command, session_id='A')
+    assert client.calls[-1][1]['session_id'] != first
+    value, _ = restarted.before_turn(session_id='A', turn_id='new', prompt='Continue')
+    assert 'Preserve this accepted plan' in value and first in value
+
+
+@pytest.mark.parametrize('assignment,attempt', [
+    ({'agent_id':'me','session_id':'different'}, {}),
+    ({'agent_id':'another-agent'}, {}),
+    ({'agent_id':'me'}, {'id':'legacy-attempt'}),
+])
+def test_runtime_stops_after_session_handoff_or_unidentified_legacy_attempt(tmp_path, assignment, attempt):
+    client = Client()
+    runtime = Team0AgentRuntime(RuntimeConfig(api_key='key', data_dir=tmp_path), client=client)
+    runtime.bind_work(session_id='A', action_id='task')
+    client.work_tool = lambda *a, **kw: {'actor_id':'me', 'state':{'assignment':assignment, 'attempt':attempt}}
+    value, _ = runtime.before_turn(session_id='A', turn_id='next', prompt='Continue')
+    assert 'STOP bound-task execution' in value and 'handoff' in value
+
+
+def test_failed_claim_does_not_bind_session(tmp_path):
+    client = Client()
+    runtime = Team0AgentRuntime(RuntimeConfig(api_key='key', data_dir=tmp_path), client=client)
+    client.denied = True
+    with pytest.raises(ApiError):
+        runtime.work_command(action_id='task', command={'command':'accept','idempotency_key':'claim'}, session_id='A')
+    client.denied = False
+    client.calls.clear()
+    runtime.before_turn(session_id='A', turn_id='next', prompt='Continue')
+    assert not client.calls

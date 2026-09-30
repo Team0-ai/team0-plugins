@@ -75,12 +75,20 @@ class Team0AgentRuntime:
             self.client.work_tool('work_read', {'action_id': action_id}, request_id=stable_id('workbind', session_id, action_id))
         self.store.bind_work(session_id, action_id, stable_id('connection', self.config.host_id, self.config.api_key or ''))
 
-    def work_command(self, *, action_id: str | None, command: Mapping[str, Any], manage: bool = False) -> Mapping[str, Any]:
+    def work_command(self, *, action_id: str | None, command: Mapping[str, Any], manage: bool = False,
+                     session_id: str, session_label: str = "") -> Mapping[str, Any]:
         """Explicit structured reports only. Completion is never inferred from a turn ending."""
         if not self.client:
             raise ApiError('work.not_configured', status=403)
-        return self.client.work_tool('work_manage' if manage else 'work_report',
-            {'action_id': action_id or '', 'command': dict(command)}, request_id=str(command['idempotency_key']))
+        if not session_id:
+            raise ApiError('work.session_required', status=422)
+        result = self.client.work_tool('work_manage' if manage else 'work_report',
+            {'action_id': action_id or '', 'command': dict(command),
+             'session_id': stable_id('worksession', self.config.host_id, session_id),
+             'session_label': session_label}, request_id=str(command['idempotency_key']))
+        if action_id and command.get('command') in {'accept', 'start'}:
+            self.store.bind_work(session_id, action_id, stable_id('connection', self.config.host_id, self.config.api_key or ''))
+        return result
 
     def prepare_turn(
         self, *, session_id: str, turn_id: str, prompt: str,
@@ -130,10 +138,19 @@ class Team0AgentRuntime:
         prepared = build_agent_turn_context(
             read, maximum=self.config.context_max_chars
         )
+        this_session = stable_id('worksession', self.config.host_id, session_id)
+        prepared = replace(prepared, policy=f'When using shared work tools, this conversation\'s session_id is {this_session}; retain it for claims and updates.\n' + prepared.policy)
         if active_work:
             try:
                 work = self.client.work_tool('work_read', {'action_id': active_work},
                     request_id=stable_id('workread', session_id, turn_id, active_work))
+                assignment = work.get('state', {}).get('assignment') or {}
+                attempt = work.get('state', {}).get('attempt') or {}
+                if (assignment.get('session_id') and assignment['session_id'] != this_session
+                        or assignment.get('agent_id') and work.get('actor_id')
+                        and assignment['agent_id'] != work['actor_id']
+                        or attempt and not assignment.get('session_id')):
+                    raise ApiError('work.session_mismatch', status=409)
                 # Reserve a bounded task slice; never inject the whole work roster.
                 task_budget = min(6000, self.config.context_max_chars // 3)
                 encoded = json.dumps(work, ensure_ascii=False, default=str)
@@ -141,11 +158,13 @@ class Team0AgentRuntime:
                 if len(encoded) > task_budget:
                     data += '\nTask context truncated; read work_read for the complete checkpoint/questions before acting.'
                 prepared = replace(prepared, data=data + '\n\n' + prepared.data,
-                    policy='For the bound task, use its exact revision, assignment generation and attempt ID. Resolve blocking questions and observe stop requests before effects. Use work_report for explicit checkpoints and state; never infer completion from a finished chat turn.\n' + prepared.policy)
+                    policy=f'For the bound task, your session_id is {this_session}. Use only this identity with work_report/work_manage (the runtime work helper supplies it automatically). Never copy a different claimant session ID. Acceptance and start are required before execution. Use the exact revision, assignment generation and attempt ID. Resolve blocking questions and observe stop requests before effects. Never infer completion from a finished chat turn.\n' + prepared.policy)
             except ApiError as error:
                 # Ordinary understanding may be usable, but stale task context must not
                 # silently authorize continued execution after revocation or handoff.
-                prepared = replace(prepared, policy='STOP bound-task execution: its current authority/state could not be read. Obtain a successful work_read before continuing this task.\n' + prepared.policy)
+                reason = ('Another session or agent owns this assignment, or its older execution has no session identity. Request an explicit stopped/reconciled handoff before continuing.'
+                    if error.code == 'work.session_mismatch' else 'Its current authority/state could not be read. Obtain a successful work_read before continuing this task.')
+                prepared = replace(prepared, policy='STOP bound-task execution: ' + reason + '\n' + prepared.policy)
                 self.store.update_health(last_work_error=error.code)
         rendered = prepared.render()
         self.store.attach_understanding_read(
