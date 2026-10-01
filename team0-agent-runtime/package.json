@@ -5,6 +5,7 @@
   "type": "module",
   "openclaw": {
     "extensions": ["./openclaw/index.mjs"],
-    "compat": { "pluginApi": ">=2026.9.4", "minGatewayVersion": "2026.9.4" }
+    "compat": { "pluginApi": ">=2026.9.4", "minGatewayVersion": "2026.9.4" },
+    "build": { "openclawVersion": "2026.9.4" }
   }
 }

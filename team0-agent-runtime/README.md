@@ -124,10 +124,10 @@ injects governed context at `before_prompt_build`, and submits the exact complet
 exchange at `agent_end`. It does not put the key into the prompt or log it. It skips internal,
 failed, and uncorrelated turns. OpenClaw needs Python 3 in the Gateway environment.
 
-After the public plugin repository is published, run these in the Gateway environment:
+For manual installation, run these in the Gateway environment:
 
 ```bash
-openclaw plugins install team0-agent-runtime --marketplace ybentov1/team0-plugins
+openclaw plugins install team0-agent-runtime --marketplace Team0-ai/team0-plugins
 openclaw config set plugins.entries.team0-agent-runtime.hooks.allowConversationAccess true --strict-json
 openclaw plugins enable team0-agent-runtime
 ```
@@ -153,7 +153,7 @@ Both hosts install from a published catalog, and each connects itself:
 claude plugin marketplace add https://team0.ai/plugins/marketplace.json
 claude plugin install team0-agent-runtime@team0
 
-codex plugin marketplace add ybentov1/team0-plugins
+codex plugin marketplace add Team0-ai/team0-plugins
 codex plugin add team0-agent-runtime@team0
 ```
 

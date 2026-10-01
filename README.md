@@ -13,21 +13,21 @@ needs its own Team0 connection and host-level plugin approval.
 **Claude Code**
 
 ```sh
-claude plugin marketplace add ybentov1/team0-plugins
+claude plugin marketplace add Team0-ai/team0-plugins
 claude plugin install team0-agent-runtime@team0
 ```
 
 **Codex**
 
 ```sh
-codex plugin marketplace add ybentov1/team0-plugins
+codex plugin marketplace add Team0-ai/team0-plugins
 codex plugin add team0-agent-runtime@team0
 ```
 
 **OpenClaw**
 
 ```sh
-openclaw plugins install team0-agent-runtime --marketplace ybentov1/team0-plugins
+openclaw plugins install team0-agent-runtime --marketplace Team0-ai/team0-plugins
 ```
 
 OpenClaw also needs a Team0 MCP connection and conversation-access approval in
