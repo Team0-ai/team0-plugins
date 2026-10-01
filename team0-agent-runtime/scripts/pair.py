@@ -23,7 +23,7 @@ sys.path.insert(0, str(PLUGIN_ROOT / "runtime"))
 
 from team0_agent_runtime import ApiError, Team0ApiClient  # noqa: E402
 from credential_store import load_credential, store_credential  # noqa: E402
-from host_profile import current_root, detect_host_id, local_pairing_unavailable_reason  # noqa: E402
+from host_profile import current_root, detect_host_id, local_pairing_unavailable_reason, profile  # noqa: E402
 from pairing_status import write_status  # noqa: E402
 
 
@@ -129,19 +129,73 @@ def _pairing_lock(path: Path) -> Iterator[bool]:
             pass
 
 
-def _page(title: str, message: str) -> bytes:
+_AGENTS_URL = "https://team0.ai/ops/w/living-understanding?view=agents"
+
+# The website's world: warm paper by day, ink by night, one terracotta accent.
+_PAGE_STYLE = (
+    ":root{--bg:#f3eee6;--card:#fbf8f3;--ink:#1b1714;--muted:#62574c;--line:#d9cfc0;"
+    "--clay:#c8553d;--clay-soft:#f0d9d0;color-scheme:light}"
+    "@media (prefers-color-scheme:dark){:root{--bg:#1b1714;--card:#241e1a;--ink:#f3eee6;"
+    "--muted:#bdb2a5;--line:#3a312a;--clay:#e07a62;--clay-soft:#3a2520;color-scheme:dark}}"
+    "*{box-sizing:border-box}"
+    "body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:var(--bg);"
+    "color:var(--ink);font-family:'Schibsted Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}"
+    ".card{width:100%;max-width:30rem;padding:40px;border:1px solid var(--line);border-radius:20px;"
+    "background:var(--card)}"
+    ".brand{font-weight:700;font-size:20px;letter-spacing:-.02em}"
+    ".mark{width:56px;height:56px;border-radius:50%;display:grid;place-items:center;margin:32px 0 24px;"
+    "background:var(--clay-soft);color:var(--clay)}"
+    "h1{margin:0;font-size:34px;line-height:1.05;letter-spacing:-.03em;font-weight:800}"
+    "p{margin:14px 0 0;font-size:17px;line-height:1.6;color:var(--muted)}"
+    "ul{list-style:none;margin:28px 0 0;padding:20px 0 0;border-top:1px solid var(--line)}"
+    "li{display:flex;gap:12px;font-size:15px;line-height:1.55;color:var(--ink);margin-top:12px}"
+    "li:first-child{margin-top:0}li span{color:var(--clay);font-weight:700}"
+    "a{display:inline-block;margin-top:28px;color:var(--ink);font-size:15px;font-weight:600;"
+    "text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:6px}"
+    "a:hover{text-decoration-color:var(--clay)}"
+    "small{display:block;margin-top:20px;font-size:13px;color:var(--muted)}"
+)
+_CHECK = (
+    "<svg width='26' height='26' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' "
+    "stroke-linecap='round' stroke-linejoin='round' aria-hidden='true'><path d='M5 12.5l4.5 4.5L19 7.5'/></svg>"
+)
+_CROSS = (
+    "<svg width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2.4' "
+    "stroke-linecap='round' aria-hidden='true'><path d='M7 7l10 10M17 7L7 17'/></svg>"
+)
+
+
+def _page(host_id: str, connected: bool) -> bytes:
+    """The browser tab the agent opened for pairing: say what happened, and what to do next."""
+    agent = html.escape(profile(host_id).name)
+    if connected:
+        title = f"{agent} is connected"
+        body = (
+            f"<div class='mark'>{_CHECK}</div><h1>{agent} is connected.</h1>"
+            f"<p>Go back to {agent} and start a new conversation. It now starts from your understanding.</p>"
+            "<ul>"
+            "<li><span>1</span>It reads your understanding before it answers.</li>"
+            "<li><span>2</span>It saves each finished conversation back, under its own name.</li>"
+            "<li><span>3</span>You can pause saving or stop its access at any time.</li>"
+            "</ul>"
+            f"<a href='{_AGENTS_URL}' target='_blank' rel='noopener'>Manage {agent} in Team0 &rarr;</a>"
+            "<small>You can close this tab.</small>"
+        )
+    else:
+        title = "Connection didn\u2019t finish"
+        body = (
+            f"<div class='mark'>{_CROSS}</div><h1>Connection didn\u2019t finish.</h1>"
+            f"<p>Team0 could not finish connecting {agent}. Go back to {agent} and connect Team0 again.</p>"
+            f"<a href='{_AGENTS_URL}' target='_blank' rel='noopener'>Open Agents in Team0 &rarr;</a>"
+        )
     return (
-        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{html.escape(title)}</title>"
-        "<style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;"
-        "background:#f7f1e7;color:#25221f;display:grid;place-items:center;"
-        "min-height:100vh;margin:0}.card{max-width:34rem;padding:2.5rem;"
-        "border:1px solid #ded5c8;border-radius:18px;background:#fffaf2;"
-        "box-shadow:0 18px 50px rgba(44,37,30,.08)}h1{font-size:1.6rem;"
-        "margin:0 0 .75rem}p{line-height:1.6;color:#70665b;margin:0}</style>"
-        f"</head><body><main class='card'><h1>{html.escape(title)}</h1>"
-        f"<p>{html.escape(message)}</p></main></body></html>"
+        f"<title>{title} \u00b7 Team0</title>"
+        "<link rel='preconnect' href='https://fonts.googleapis.com'>"
+        "<link rel='stylesheet' href='https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;600;700;800&display=swap'>"
+        f"<style>{_PAGE_STYLE}</style></head><body><main class='card'>"
+        f"<div class='brand'>Team0</div>{body}</main></body></html>"
     ).encode("utf-8")
 
 
@@ -176,12 +230,12 @@ def _handler(
                     raise OSError("credential did not survive secure-store round trip")
                 outcome["connected"] = True
                 write_status("connected", host_id=host_id, root=credential_root)
-                body = _page("Team0 is connected", "Return to your agent and start a new conversation.")
+                body = _page(host_id, connected=True)
                 status = 200
             except (ApiError, KeyError, OSError, subprocess.SubprocessError, ValueError):
                 outcome["failed"] = True
                 write_status("failed", host_id=host_id, root=credential_root, error_code="callback_rejected")
-                body = _page("Connection failed", "Return to Team0 and try connecting again.")
+                body = _page(host_id, connected=False)
                 status = 400
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
