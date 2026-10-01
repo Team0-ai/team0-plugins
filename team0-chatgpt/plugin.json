@@ -1,0 +1,26 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "team0-chatgpt",
+  "version": "0.1.0",
+  "description": "Use your governed Team0 Living Understanding in ChatGPT and contribute durable conversation updates.",
+  "author": {
+    "name": "Team0"
+  },
+  "homepage": "https://team0.ai",
+  "keywords": ["living-understanding", "memory", "context"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Team0 Living Understanding",
+        "shortDescription": "Use Team0 in ChatGPT",
+        "longDescription": "Read relevant Team0 context and contribute durable updates through your own governed connection. ChatGPT chooses when to use tools; this plugin does not run before or after every turn.",
+        "developerName": "Team0",
+        "category": "Productivity",
+        "capabilities": ["Read Living Understanding", "Contribute conversation updates"],
+        "websiteURL": "https://team0.ai",
+        "privacyPolicyURL": "https://team0.ai/privacy",
+        "termsOfServiceURL": "https://team0.ai/terms"
+      }
+    }
+  }
+}

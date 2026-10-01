@@ -1,4 +1,27 @@
-# Team0 Living Understanding for connected agents
+# Team0 Living Understanding for OpenClaw and coding agents
+
+Team0 gives OpenClaw a long-term memory of your work, not just what you say in chats. With your
+permission, it draws on connected sources such as email and calendar as they sync, as well as
+completed agent conversations. The resulting understanding of people, priorities, decisions, and
+commitments is shared with your other Team0-connected agents. Once you connect your Team0 account
+and allow the plugin's hooks, relevant understanding arrives **before** each OpenClaw turn, and
+the completed conversation returns to Team0 for governed learning. You do not need to mention
+Team0 in every message.
+
+This is an evolving understanding, **not a word-for-word chat archive**. It can help an agent
+remember a decision or changed plan, but it should not be used to recover the exact text of an
+old message. Automatic reads and returns apply only in hosts where this plugin runs and has the
+required access; other Team0 connections may be on-demand. This adapter uses OpenClaw lifecycle
+hooks; it does not replace OpenClaw's local memory files.
+
+For OpenClaw, install the plugin **in the Gateway environment** (on the host, in its Docker
+container, or on its remote server), then connect your Team0 account and allow conversation
+access. A plugin showing as installed is not proof that it is connected: check the Team0 Agents
+page for a recorded read and contribution after a new conversation.
+
+The plugin uses your own Team0 grant. Your access key stays in the Gateway configuration and is
+not placed in prompts. You can stop contributions without stopping reads, or revoke all access,
+from Team0's Agents page. Setup details and host-specific behavior follow below.
 
 This plugin packages adapters for the host-neutral Team0 Agent Runtime. It uses one Team0
 agent grant and one access key for two complementary jobs:

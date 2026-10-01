@@ -1,6 +1,7 @@
 {
   "name": "team0-agent-runtime",
   "version": "0.1.4",
+  "description": "Work-aware memory for OpenClaw, grounded in connected sources and agent conversations.",
   "type": "module",
   "openclaw": {
     "extensions": ["./openclaw/index.mjs"],

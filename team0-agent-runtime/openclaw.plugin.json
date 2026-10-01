@@ -1,7 +1,8 @@
 {
   "id": "team0-agent-runtime",
   "name": "Team0 Living Understanding",
-  "description": "Automatic governed Team0 context and conversation learning for OpenClaw.",
+  "description": "Work-aware memory for OpenClaw. Team0 connects your authorized work sources and agent conversations to keep people, priorities, and decisions in context.",
+  "categories": ["memory"],
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false }
 }

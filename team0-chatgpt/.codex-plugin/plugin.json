@@ -1,0 +1,24 @@
+{
+  "name": "team0-chatgpt",
+  "version": "0.1.0",
+  "description": "Use governed Team0 Living Understanding in ChatGPT conversations.",
+  "author": {
+    "name": "Team0"
+  },
+  "skills": "./skills/",
+  "mcpServers": {
+    "team0": {
+      "type": "http",
+      "url": "https://api.team0.ai/v1/mcp"
+    }
+  },
+  "interface": {
+    "displayName": "Team0 Living Understanding",
+    "shortDescription": "Use Team0 in ChatGPT",
+    "longDescription": "Read relevant context and contribute durable updates through your governed Team0 connection.",
+    "developerName": "Team0",
+    "category": "Productivity",
+    "capabilities": ["Read Living Understanding", "Contribute conversation updates"],
+    "defaultPrompt": "What should I focus on today, given my current priorities?"
+  }
+}

@@ -1,46 +1,51 @@
 # Team0 plugins
 
-The Team0 agent runtime: your Team0 Living Understanding is read before every
-turn in your coding agent, and every finished conversation is returned to Team0
-so it keeps learning. You need a [Team0](https://team0.ai) account.
+This repository contains the public plugin packages for [Team0](https://team0.ai).
+The Team0 application and its hosted MCP service are maintained separately.
 
-## Install
+## Agent runtime: Claude Code, Codex, and OpenClaw
+
+[`team0-agent-runtime/`](team0-agent-runtime/) is one shared package with native
+adapters for all three hosts. Its hooks load relevant Living Understanding before
+an ordinary turn and return completed turns for governed learning. Each host
+needs its own Team0 connection and host-level plugin approval.
 
 **Claude Code**
 
-    claude plugin marketplace add ybentov1/team0-plugins
-    claude plugin install team0-agent-runtime@team0
+```sh
+claude plugin marketplace add ybentov1/team0-plugins
+claude plugin install team0-agent-runtime@team0
+```
 
 **Codex**
 
-    codex plugin marketplace add ybentov1/team0-plugins
-    codex plugin add team0-agent-runtime@team0
+```sh
+codex plugin marketplace add ybentov1/team0-plugins
+codex plugin add team0-agent-runtime@team0
+```
 
-Both hosts read the same catalog, `.claude-plugin/marketplace.json`.
+**OpenClaw**
 
-Then start a new session. Team0 opens a page in your browser once; click
-**Connect**, and every session after that is automatic.
+```sh
+openclaw plugins install team0-agent-runtime --marketplace ybentov1/team0-plugins
+```
 
-## What it does on your machine
+OpenClaw also needs a Team0 MCP connection and conversation-access approval in
+its Gateway. See the [runtime setup and host-specific instructions](team0-agent-runtime/README.md)
+before enabling its hooks. None of these installation commands grants trust or
+connection consent automatically.
 
-- Before each turn it asks Team0 for the part of your understanding that is
-  relevant to what you just asked, and adds it as context.
-- After each turn it returns the finished conversation to Team0. Contributions
-  are recorded as candidates and attributed to this agent.
-- On the first turn, if this host is not connected yet, it opens the Team0
-  connect page and saves the key it returns in your system credential store
-  (Keychain on macOS). The key is never shown, copied or logged.
+## ChatGPT
 
-Each host gets its own Team0 agent, its own key and its own local state, so
-Claude Code and Codex are never mistaken for one another.
+[`team0-chatgpt/`](team0-chatgpt/) is the source package for Team0's ChatGPT
+plugin. It connects to Team0's hosted MCP service for on-demand reads and
+contributions. Unlike the native agent runtime, ChatGPT does not run Team0
+before- and after-turn hooks automatically. This GitHub folder is source code,
+not a ChatGPT Store listing or a Claude/Codex marketplace entry; installation
+and OAuth consent happen in ChatGPT.
 
-You can stop an agent's access or its contributions at any time in Team0, under
-Living Understanding, then Agents.
+Claude.ai, Claude Cowork, and Town connect to the hosted Team0 MCP service;
+they do not have downloadable packages in this repository.
 
-## Requirements
-
-Python 3.9 or newer on your machine, and a Team0 account.
-
-## Support
-
-support@team0.ai
+You can stop an agent's access or contributions in Team0 under **Agents**.
+For help, contact support@team0.ai.

@@ -1,0 +1,12 @@
+interface:
+  display_name: "Team0 understanding"
+  short_description: "Use governed context across conversations"
+  default_prompt: "Use $team0-understanding to answer using my current priorities."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "team0"
+      description: "Read and contribute to the owner's governed Team0 Living Understanding"
+      transport: "streamable_http"
+      url: "https://api.team0.ai/v1/mcp"
