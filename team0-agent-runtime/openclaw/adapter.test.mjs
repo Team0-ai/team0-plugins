@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { connectionFromConfig, createOpenClawAdapter, visibleText } from './adapter.mjs';
 
 const config = { mcp: { servers: { team0: {
@@ -12,6 +13,15 @@ test('uses only the configured Team0 MCP grant and never returns its key as cont
   assert.equal(connectionFromConfig({ mcp: { servers: { team0: { url: 'https://example.com/v1/mcp', headers: {} } } } }, {}), null);
   assert.equal(connectionFromConfig({ mcp: { servers: { team0: { url: 'https://example.com/v1/mcp', headers: { Authorization: 'Bearer key' } } } } }), null);
   assert.equal(connectionFromConfig({ mcp: { servers: { team0: { url: 'https://api.team0.ai/other', headers: { Authorization: 'Bearer key' } } } } }), null);
+});
+
+test('uses the plugin access key without requiring an MCP server', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../openclaw.plugin.json', import.meta.url), 'utf8'));
+  assert.equal(manifest.configSchema.properties.apiKey.type, 'string');
+  assert.equal(manifest.uiHints.apiKey.sensitive, true);
+  assert.deepEqual(connectionFromConfig({ plugins: { entries: { 'team0-agent-runtime': { config: { apiKey: 't0_plugin' } } } } }), {
+    key: 't0_plugin', baseUrl: 'https://api.team0.ai/v1',
+  });
 });
 
 test('keeps thinking and tool blocks out of the contributed assistant text', () => {

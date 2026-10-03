@@ -4,5 +4,12 @@
   "description": "Work-aware memory for OpenClaw. Team0 connects your authorized work sources and agent conversations to keep people, priorities, and decisions in context.",
   "categories": ["memory"],
   "activation": { "onStartup": true },
-  "configSchema": { "type": "object", "additionalProperties": false }
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": { "apiKey": { "type": "string" } }
+  },
+  "uiHints": {
+    "apiKey": { "label": "Team0 access key", "sensitive": true, "help": "Paste the key shown in Team0 when connecting this agent." }
+  }
 }

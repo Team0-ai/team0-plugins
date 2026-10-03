@@ -1,0 +1,5 @@
+name: team0-agent-runtime
+version: "1.0"
+description: Read Team0 before Hermes turns and contribute completed turns automatically.
+requires_env:
+  - TEAM0_HERMES_API_KEY

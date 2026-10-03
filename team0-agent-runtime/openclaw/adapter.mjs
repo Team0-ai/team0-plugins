@@ -5,6 +5,10 @@ import { join } from 'node:path';
 const TEAM0_MCP_PATH = '/v1/mcp';
 
 export function connectionFromConfig(config, env = process.env) {
+  const pluginKey = config?.plugins?.entries?.['team0-agent-runtime']?.config?.apiKey;
+  if (typeof pluginKey === 'string' && pluginKey.trim()) {
+    return { key: pluginKey.trim(), baseUrl: 'https://api.team0.ai/v1' };
+  }
   const server = config?.mcp?.servers?.team0;
   if (!server || server.enabled === false || typeof server.url !== 'string') return null;
   let url;

@@ -124,10 +124,18 @@ injects governed context at `before_prompt_build`, and submits the exact complet
 exchange at `agent_end`. It does not put the key into the prompt or log it. It skips internal,
 failed, and uncorrelated turns. OpenClaw needs Python 3 in the Gateway environment.
 
-For manual installation, run these in the Gateway environment:
+In the OpenClaw Gateway's **Plugins** screen, search for **Team0 Living Understanding** and
+install the [published ClawHub plugin](https://clawhub.ai/team0-ai/plugins/team0-agent-runtime).
+If an older Team0 plugin is installed, update or replace that copy rather than running two.
+Then add a Streamable HTTP MCP server named `team0` under **Settings → MCP**, using the URL above
+and `Authorization: Bearer <your Team0 access key>`. The key is shown once in Team0's Agents
+connection flow; keep it out of chat and source control. Explicitly allow conversation access
+for the plugin, then start a new conversation. Installing the plugin alone does not connect it.
+
+For CLI installation and hook approval, run these in the Gateway environment:
 
 ```bash
-openclaw plugins install team0-agent-runtime --marketplace Team0-ai/team0-plugins
+openclaw plugins install clawhub:team0-agent-runtime
 openclaw config set plugins.entries.team0-agent-runtime.hooks.allowConversationAccess true --strict-json
 openclaw plugins enable team0-agent-runtime
 ```
@@ -144,6 +152,30 @@ OpenClaw's MCP connection is still used for optional Team0 tools. The native hoo
 the read and return automatic. Stop contributions is enforced by the Team0 grant on writes while
 reads remain available; Stop all access revokes both. Those owner controls still require an
 end-to-end OpenClaw acceptance run before this host is called production-proven.
+
+### Hermes
+
+Use the Hermes profile you chat with:
+
+1. In **Keys → Custom Keys**, save your Team0 access key as `TEAM0_HERMES_API_KEY`.
+2. In **Plugins → Install from GitHub / Git URL**, enter
+   `Team0-ai/team0-plugins/team0-agent-runtime`, select **Enable after install**, and
+   install. Review the host's security prompt. Reuse an existing Team0 plugin rather
+   than installing another copy.
+3. Activate the connection on Team0's setup screen, then start a new Hermes chat.
+   Check Team0 for a read before the reply and a contribution after the completed turn.
+
+The plugin registers `pre_llm_call` and `post_llm_call`; it does not depend on the
+model remembering instructions in SOUL.md. MCP is optional for on-demand tools.
+The plugin needs its own `TEAM0_HERMES_API_KEY` even if an MCP key is already saved.
+Never put the key in chat or source control.
+
+Terminal alternative, in the same Hermes environment/profile: save the key in its
+`.env` as `TEAM0_HERMES_API_KEY`, then run:
+
+```sh
+hermes plugins install Team0-ai/team0-plugins/team0-agent-runtime --enable
+```
 
 ## Install
 
