@@ -1,13 +1,13 @@
 {
-  "description": "Automatic Team0 Living Understanding lifecycle. Both hosts load this file: Claude Code discovers hooks/hooks.json, and so does Codex.",
+  "description": "Automatic Team0 Living Understanding lifecycle. Both hosts load this file: Claude Code discovers hooks/hooks.json, and so does Codex, which also sets CLAUDE_PLUGIN_ROOT for compatibility.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/scripts/team0_hook.py\" connect",
-            "commandWindows": "& \"$env:PLUGIN_ROOT\\scripts\\team0_hook.ps1\" connect",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/team0_hook.py\" connect",
+            "commandWindows": "& \"$env:CLAUDE_PLUGIN_ROOT\\scripts\\team0_hook.ps1\" connect",
             "timeout": 10,
             "statusMessage": "Checking your Team0 connection"
           }
@@ -19,8 +19,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/scripts/team0_hook.py\" before-turn",
-            "commandWindows": "& \"$env:PLUGIN_ROOT\\scripts\\team0_hook.ps1\" before-turn",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/team0_hook.py\" before-turn",
+            "commandWindows": "& \"$env:CLAUDE_PLUGIN_ROOT\\scripts\\team0_hook.ps1\" before-turn",
             "timeout": 20,
             "statusMessage": "Loading your Team0 understanding",
             "additionalContextLimit": 8000
@@ -33,8 +33,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT:-$PLUGIN_ROOT}/scripts/team0_hook.py\" after-turn",
-            "commandWindows": "& \"$env:PLUGIN_ROOT\\scripts\\team0_hook.ps1\" after-turn",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/team0_hook.py\" after-turn",
+            "commandWindows": "& \"$env:CLAUDE_PLUGIN_ROOT\\scripts\\team0_hook.ps1\" after-turn",
             "timeout": 15,
             "statusMessage": "Returning this turn to Team0"
           }

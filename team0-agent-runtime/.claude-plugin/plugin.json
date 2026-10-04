@@ -2,11 +2,27 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "team0-agent-runtime",
   "displayName": "Team0 Living Understanding",
-  "version": "0.1.4",
+  "version": "0.1.6",
   "description": "Mount a Team0 Living Understanding before every Claude Code turn and return completed turns afterward.",
   "author": {
     "name": "Team0"
   },
+  "homepage": "https://team0.ai",
+  "repository": "https://github.com/Team0-ai/team0-plugins",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "second-brain",
+    "context",
+    "living-understanding",
+    "mcp",
+    "agents"
+  ],
+  "icon": "./assets/icon.png",
+  "documentationUrl": "https://team0.ai/claude-code-and-codex",
+  "supportUrl": "https://team0.ai/support",
+  "privacyPolicyUrl": "https://team0.ai/privacy",
+  "termsOfServiceUrl": "https://team0.ai/terms",
   "mcpServers": {
     "team0": {
       "command": "python3",

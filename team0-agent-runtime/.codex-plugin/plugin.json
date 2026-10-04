@@ -1,10 +1,21 @@
 {
   "name": "team0-agent-runtime",
-  "version": "0.1.4+codex.20260929155743",
+  "version": "0.1.6",
   "description": "Mount a Team0 Living Understanding into Codex before every turn and return completed turns afterward.",
   "author": {
     "name": "Team0"
   },
+  "homepage": "https://team0.ai",
+  "repository": "https://github.com/Team0-ai/team0-plugins",
+  "license": "MIT",
+  "keywords": [
+    "memory",
+    "second-brain",
+    "context",
+    "living-understanding",
+    "mcp",
+    "agents"
+  ],
   "interface": {
     "displayName": "Team0 Living Understanding",
     "shortDescription": "Use Team0 as Codex's shared, continuously learning understanding.",
@@ -16,7 +27,12 @@
       "Automatic post-turn learning",
       "Team0 MCP abilities"
     ],
-    "defaultPrompt": "Use my Team0 Living Understanding as context while helping me."
+    "defaultPrompt": "Use my Team0 Living Understanding as context while helping me.",
+    "websiteURL": "https://team0.ai",
+    "privacyPolicyURL": "https://team0.ai/privacy",
+    "termsOfServiceURL": "https://team0.ai/terms",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
   },
   "mcpServers": "./.mcp.json"
 }
