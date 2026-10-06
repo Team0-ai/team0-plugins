@@ -20,6 +20,17 @@ TOOL_ACTIVITY_SCHEMA = "team0.agent_tool_activity.v1"
 MAX_MESSAGE_CHARS = 16_000
 
 
+def _fit_message(text: str) -> str:
+    """Shorten a message over MAX_MESSAGE_CHARS to its beginning and end, marked."""
+    if len(text) <= MAX_MESSAGE_CHARS:
+        return text
+    marker = f"\n\n[... {{}} characters omitted: the message was longer than {MAX_MESSAGE_CHARS:,} ...]\n\n"
+    keep = MAX_MESSAGE_CHARS - len(marker.format(len(text)))
+    head = keep * 3 // 4
+    tail = keep - head
+    return text[:head] + marker.format(len(text) - head - tail) + text[len(text) - tail:]
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -219,13 +230,10 @@ class Team0AgentRuntime:
                 last_write_error=None, last_write_at=utc_now()
             )
             return None
-        prompt = str(turn.get("prompt") or "")
-        answer = str(assistant_message or "")
-        if len(prompt) > MAX_MESSAGE_CHARS or len(answer) > MAX_MESSAGE_CHARS:
-            return self._write_error(
-                "turn_too_large",
-                "This turn exceeded the current Team0 sync limit and was retained for recovery.",
-            )
+        # Over the limit: keep the beginning and the end, visibly marked. Retaining it
+        # instead stuck the turn and repeated a warning on every later turn.
+        prompt = _fit_message(str(turn.get("prompt") or ""))
+        answer = _fit_message(str(assistant_message or ""))
         session_id = str(turn["session_id"])
         record_id = stable_id("agentturn", source_id, session_id, turn_id)
         observed_at = utc_now()

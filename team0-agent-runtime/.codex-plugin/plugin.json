@@ -1,6 +1,6 @@
 {
   "name": "team0-agent-runtime",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Mount a Team0 Living Understanding into Codex before every turn and return completed turns afterward.",
   "author": {
     "name": "Team0"
