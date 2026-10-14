@@ -130,6 +130,7 @@ def _pairing_lock(path: Path) -> Iterator[bool]:
 
 
 _AGENTS_URL = "https://team0.ai/ops/w/living-understanding?view=agents"
+_UPGRADE_URL = "https://team0.ai/ops/subscription"
 
 # The website's world: warm paper by day, ink by night, one terracotta accent.
 _PAGE_STYLE = (
@@ -215,6 +216,20 @@ def _handler(
                 values = parse_qs(self.rfile.read(length).decode("utf-8"), keep_blank_values=True)
                 returned_state = values.get("state", [""])[0]
                 key = values.get("credential", [""])[0]
+                # The plan has no agent access: remember it so the hook stops
+                # reopening the page, and send the browser on to upgrade.
+                if (
+                    values.get("outcome", [""])[0] == "plan_required"
+                    and hmac.compare_digest(returned_state, state)
+                ):
+                    outcome["plan_required"] = True
+                    write_status("plan_required", host_id=host_id, root=credential_root, error_code="plan_required")
+                    self.send_response(303)
+                    self.send_header("Location", _UPGRADE_URL)
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
                 if not hmac.compare_digest(returned_state, state) or not key.startswith("t0_"):
                     raise ValueError("invalid pairing response")
                 client = Team0ApiClient(base_url="https://api.team0.ai/v1", api_key=key)

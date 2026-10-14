@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -28,6 +29,7 @@ from team0_agent_runtime.storage import stable_id  # noqa: E402
 from credential_store import load_credential  # noqa: E402
 from host_profile import (  # noqa: E402
     configure_environment,
+    current_root,
     data_root,
     detect_host_id,
     host_credential,
@@ -72,6 +74,27 @@ def _load_saved_credential(host_id: str) -> str | None:
             )
         return key
     return ambient_key
+
+
+# After the connect page reported that the plan has no agent access, don't
+# reopen it on every session and message; the person was sent to upgrade.
+_UPGRADE_PAUSE_SECONDS = 6 * 60 * 60
+_UPGRADE_WARNING = (
+    "Team0 is not connected: your Team0 plan doesn't include agent connections "
+    "(usually an ended trial). Upgrade at https://team0.ai/ops/subscription and "
+    "the connect page will open again within a few hours."
+)
+
+
+def _upgrade_pending(host_id: str) -> bool:
+    status = read_status(current_root(host_id)) or {}
+    if status.get("state") != "plan_required":
+        return False
+    try:
+        updated = datetime.fromisoformat(str(status.get("updated_at")).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - updated).total_seconds() < _UPGRADE_PAUSE_SECONDS
 
 
 def _start_pairing(host_id: str) -> bool:
@@ -281,6 +304,9 @@ def main(argv: list[str]) -> int:
         if saved_key:
             if not _credential_is_revoked():
                 return 0
+            if _upgrade_pending(host_id):
+                _output(warning=_UPGRADE_WARNING)
+                return 0
             launched = _start_pairing(host_id)
             _output(
                 warning=unavailable_reason or (
@@ -291,6 +317,9 @@ def main(argv: list[str]) -> int:
                     "Reconnect this host from Team0 under Living Understanding, then Agents."
                 )
             )
+            return 0
+        if _upgrade_pending(host_id):
+            _output(warning=_UPGRADE_WARNING)
             return 0
         launched = _start_pairing(host_id)
         _output(
@@ -305,6 +334,9 @@ def main(argv: list[str]) -> int:
         )
         return 0
     if command == "before-turn" and not saved_key:
+        if _upgrade_pending(host_id):
+            _output(warning=_UPGRADE_WARNING)
+            return 0
         launched = _start_pairing(host_id)
         _output(
             warning=(
